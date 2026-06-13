@@ -1,0 +1,158 @@
+# Phi 作为模型输入特征的配置文件
+# 
+# 本配置文件用于将 phi 谓词作为模型输入特征（而非损失函数形式）
+# 主要特性：
+# 1. use_phi_as_feature: 控制是否将 phi 作为输入特征
+# 2. phi_type: 指定使用的 phi 类型
+# 3. 损失函数使用标准 MSE
+
+qlib_init:
+    provider_uri: "./qlib_data/cn_data"
+    region: cn
+
+# 基础参数配置
+market: &market csi800 #csi500 #csi300 #csi800
+benchmark: &benchmark SH000906 #SH000905 #SH000300 #SH000906
+logdir: &logdir output_phi_feature/base_model
+seq_len: &seq_len 20
+
+# 模型配置 - 通用参数
+# 注意：enc_in 会在运行时根据 phi_feature_dim 自动调整
+model_config: &model_config
+  seq_len: *seq_len
+  pred_len: 1
+  e_layers: 2
+  factor: 3
+  enc_in: 158           # 原始特征维度（Alpha158）
+  c_out: 1
+  d_model: 64
+  d_ff: 64
+  n_heads: 2
+  dropout: 0.1
+  n_chans: 32           # TCN专用
+  kernel_size: 4        # TCN专用
+  noise_level: 0.0
+  use_attn: False
+
+# Phi 特征相关配置
+# 可用的 phi 类型及其特征维度：
+#   基于时间序列特性：
+#     - phi_momentum:       3 维
+#     - phi_volatility:     3 维
+#     - phi_return_dist:    4 维
+#     - phi_trend:          3 维
+#     - phi_multiscale:     8 维
+#     - phi_temporal:       8 维
+#   基于金融指标关联性：
+#     - phi_feature_corr:   20 维
+#     - phi_price_volume:   3 维
+#     - phi_factor:         10 维
+#     - phi_technical:      3 维
+#     - phi_vol_return:     4 维
+#   基于股票间相关性：
+#     - phi_return_sim:     5 维
+#     - phi_market_beta:    3 维
+#     - phi_cross_corr:     1 维
+#     - phi_lead_lag:       3 维
+#     - phi_common_factor:  3 维
+#     - phi_vol_sync:       3 维
+#     - phi_tail_risk:      4 维
+#     - phi_market_regime:  3 维
+#     - phi_sector_cluster: 5 维
+
+data_handler_config: &data_handler_config
+    start_time: 2018-01-01
+    end_time: 2025-08-31
+    fit_start_time: 2018-01-01
+    fit_end_time: 2022-12-31
+    instruments: *market
+    infer_processors:
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+        - class: Fillna
+          kwargs:
+              fields_group: feature
+    learn_processors:
+        - class: DropnaLabel
+        - class: CSRankNorm
+          kwargs:
+              fields_group: label
+    label: ["Ref($close, -2) / Ref($close, -1) - 1"]
+
+port_analysis_config: &port_analysis_config
+    strategy:
+        class: TopkDropoutStrategy
+        module_path: qlib.contrib.strategy
+        kwargs:
+            signal: <PRED>
+            topk: 50
+            n_drop: 5
+    backtest:
+        start_time: 2024-01-01
+        end_time: 2025-08-31
+        account: 100000000
+        benchmark: *benchmark
+        exchange_kwargs:
+            limit_threshold: 0.095
+            deal_price: close
+            open_cost: 0.0005
+            close_cost: 0.0015
+            min_cost: 5
+
+task:
+    model:
+      class: PhiFeatureModel
+      module_path: src/model_backbone_phi_feature.py
+      kwargs:
+        lr: 1e-4
+        n_epochs: 50
+        max_steps_per_epoch: 5000
+        early_stop: 10
+        seed: 2025
+        logdir: *logdir
+        model_type: LSTM                 # 可选: GAT, LSTM, GRU, TCN, Transformer
+        model_config: *model_config
+        use_phi_as_feature: True         # 是否将 phi 作为输入特征
+        phi_type: phi_momentum           # phi 类型（单个或列表）
+        freeze_model: False
+        plot_training: True
+        plot_show: False
+    dataset:
+      class: MTSDatasetH
+      module_path: src/dataset_ori_onehot.py
+      kwargs:
+        handler:
+          class: Alpha158
+          module_path: qlib.contrib.data.handler
+          kwargs: *data_handler_config
+        segments:
+          train: [ 2018-01-01, 2022-12-31 ]
+          valid: [ 2023-01-01, 2023-12-31 ]
+          test: [ 2024-01-01, 2025-08-31 ]
+        seq_len: *seq_len
+        horizon: 1
+        batch_size: 800
+        ts_onehot: False
+        shuffle: True
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            model: <MODEL>
+            dataset: <DATASET>
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            ana_long_short: False
+            ann_scaler: 252
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            config: *port_analysis_config
+
+strategy_config: &strategy_config
+  topk: 50
+  hold_thre: 5
+  commission_rate: 0.001

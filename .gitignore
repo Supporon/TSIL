@@ -1,0 +1,28 @@
+# Data (symlink or local dump) — never commit
+/qlib_data/
+qlib_data/
+
+# Run outputs / experiment logs
+smoke_out/
+output_search*/
+output_f158*/
+baseline_output*/
+output_phi*/
+*/experiments/
+*.bin
+*.pkl
+backtest_result*.csv
+backtest_report*.txt
+training_curves*.png
+training_data*.csv
+*.html
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
