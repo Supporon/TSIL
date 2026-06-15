@@ -223,6 +223,11 @@ class MASTER(nn.Module):
         # market
         self.gate_input_start_index = gate_input_start_index
         self.gate_input_end_index = gate_input_end_index
+        # Honour use_gate: the gate consumes market features appended after the
+        # stock features (columns [gate_start:gate_end]). The plain Alpha158
+        # handler has no such columns, so configs set use_gate=False to skip the
+        # gate and feed all features straight through (see config comment).
+        self.use_gate = getattr(configs, "use_gate", True)
         self.d_gate_input = (gate_input_end_index - gate_input_start_index)  # F'
         self.feature_gate = Gate(self.d_gate_input, enc_in, beta=beta)
         self.alpha = torch.nn.Parameter(
@@ -237,8 +242,9 @@ class MASTER(nn.Module):
 
     def forward(self, x):
         src = x[:, :, :self.gate_input_start_index]  # N, T, D
-        gate_input = x[:, -1, self.gate_input_start_index:self.gate_input_end_index]
-        src = src * torch.unsqueeze(self.feature_gate(gate_input), dim=1)
+        if self.use_gate:
+            gate_input = x[:, -1, self.gate_input_start_index:self.gate_input_end_index]
+            src = src * torch.unsqueeze(self.feature_gate(gate_input), dim=1)
 
         x = self.x2y(src)
         x = self.pe(x)

@@ -57,7 +57,7 @@ class Transformer(nn.Module):
             nhead=configs.n_heads, dropout=self.dropout, d_model=self.hidden_size, dim_feedforward=self.d_ff
         )
         self.encoder = nn.TransformerEncoder(layer, num_layers=self.num_layers)
-        self.alpha = torch.nn.Parameter(torch.tensor(configs.tau_hat_init))  # 可学习的tau_hat参数
+        self.alpha = torch.nn.Parameter(torch.tensor(configs.tau_hat_init))  # learnable tau_hat parameter
 
         self.projection = nn.Sequential(
                 nn.Linear(self.hidden_size, self.d_ff, bias=True),

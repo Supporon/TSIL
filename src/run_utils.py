@@ -25,7 +25,7 @@ DEFAULT_SEEDS = [42, 2022, 2023, 2024, 2025]
 # Default hyper-parameter search space for search.py (Optuna).
 DEFAULT_SEARCH_SPACE = {
     "lr":      {"type": "categorical", "choices": [0.001, 0.0001, 0.00001]},
-    "layers":  {"type": "int", "low": 1, "high": 3},
+    "layers":  {"type": "categorical", "choices": [1, 2, 3]},
     "d_model": {"type": "categorical", "choices": [64, 128, 256]},
     "bs":      {"type": "categorical", "choices": [256, 512, 1024]},
 }
@@ -93,8 +93,6 @@ def apply_overrides(config: dict, args) -> dict:
     """
     mc = config["model_config"]
 
-    if getattr(args, "loss_type", None) is not None:
-        mc["loss_type"] = args.loss_type
     if getattr(args, "phi_type", None) is not None:
         mc["phi_type"] = args.phi_type
     if getattr(args, "tau_hat_init", None) is not None:

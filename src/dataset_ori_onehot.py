@@ -78,7 +78,23 @@ from qlib.data.dataset import DatasetH
 
 
 class MTSDatasetH(DatasetH):
-    """Memory Augmented Time Series Dataset
+    """Memory Augmented Time Series Dataset.
+
+    The dataset adapts what each batch carries to the ``phi_type`` of the loss
+    (passed through from ``model_config`` by ``train.py`` / ``search.py``):
+
+        phi_type = None / 'mse' / 'ones' / 'phi_cycle' / 'phi_phase' /
+                   'phi_momentum' / 'phi_volatility' / 'phi_return_dist' / ...
+            -> calendar/timestamp features are irrelevant; they are NOT built or
+               yielded. Each batch is ``{data, label, index, timestamp_feature=None}``.
+
+        phi_type startswith 'phi_timestamp'  (the Timestamp predicate Phi_ts)
+            -> calendar features ARE extracted (``timestamp_feature_get``) and
+               yielded per batch so the loss can build ``P`` from them. Their
+               encoding is controlled by ``embed`` / ``ts_onehot``:
+                 embed='timeF'              -> continuous time features (timeenc=1)
+                 embed!='timeF', ts_onehot  -> one-hot day-of-week/month/year
+                 embed!='timeF', not onehot -> integer day-of-week/month/year (default)
 
     Args:
         handler (DataHandler): data handler
@@ -89,6 +105,12 @@ class MTSDatasetH(DatasetH):
         shuffle (bool): whether shuffle data
         pin_memory (bool): whether pin data to gpu memory
         drop_last (bool): whether drop last batch < batch_size
+        embed (str): calendar encoding ('fixed' | 'learned' | 'timeF'); only used
+            when ``phi_type`` is the timestamp predicate.
+        ts_onehot (bool): one-hot the calendar features; only used when ``phi_type``
+            is the timestamp predicate.
+        phi_type (str): the loss predicate selector; decides whether timestamp
+            features are needed (see above).
     """
 
     def __init__(
@@ -106,9 +128,10 @@ class MTSDatasetH(DatasetH):
         freq='day',
         embed='fixed',
         ts_onehot=False,
+        phi_type=None,
         **kwargs,
     ):
-        # print(f"MTSDatasetH init kwargs: {kwargs}")  # 添加调试输出
+        # print(f"MTSDatasetH init kwargs: {kwargs}")  # debug output
 
         assert horizon > 0, "please specify `horizon` to avoid data leakage"
 
@@ -127,6 +150,14 @@ class MTSDatasetH(DatasetH):
         self.freq = freq
         self.embed = embed
         self.ts_onehot = ts_onehot
+
+        # Calendar/timestamp features are extracted ONLY when the loss uses the
+        # timestamp predicate (phi_type starting with 'phi_timestamp'). For every
+        # other phi_type (mse / ones / cycle / phase / momentum / volatility /
+        # return_dist / ...) timestamps are irrelevant and are not built, carried,
+        # or yielded.
+        self.phi_type = phi_type
+        self.use_timestamp = bool(phi_type) and ("phi_timestamp" in str(phi_type))
 
         # self.freq = "day"
         # self.embed = 'fixed' # 'fixed' 'learned'  'timeF'
@@ -210,7 +241,7 @@ class MTSDatasetH(DatasetH):
             df = self.handler._learn #_learn——_data
         else:
             df = self.handler._learn
-            df.index = df.index.swaplevel() # 股在前
+            df.index = df.index.swaplevel() # stock first
 
         # df = self.handler._learn
         # df.index = df.index.swaplevel()
@@ -222,22 +253,30 @@ class MTSDatasetH(DatasetH):
         self._label = df[['label']].squeeze().astype("float32")
         self._index = df.index
 
-        self._timestamp = self.timestamp_feature_get()  # add
+        # extract calendar/timestamp features only for the timestamp predicate
+        if self.use_timestamp:
+            self._timestamp = self.timestamp_feature_get()  # add
+        else:
+            self._timestamp = None
 
         # add memory to feature
         self._data = np.c_[self._data, np.zeros((len(self._data), 1), dtype=np.float32)]
 
         # padding tensor
         self.zeros = np.zeros((self.seq_len, self._data.shape[1]), dtype=np.float32)
-        self.zeros_timestamp = np.zeros((self.seq_len, self._timestamp.shape[1]), dtype=np.float32)
+        if self.use_timestamp:
+            self.zeros_timestamp = np.zeros((self.seq_len, self._timestamp.shape[1]), dtype=np.float32)
+        else:
+            self.zeros_timestamp = None
 
         # pin memory
         if self.pin_memory:
             self._data = _to_tensor(self._data)
             self._label = _to_tensor(self._label)
             self.zeros = _to_tensor(self.zeros)
-            self._timestamp = _to_tensor(self._timestamp) # add
-            self.zeros_timestamp = _to_tensor(self.zeros_timestamp) # add
+            if self.use_timestamp:
+                self._timestamp = _to_tensor(self._timestamp) # add
+                self.zeros_timestamp = _to_tensor(self.zeros_timestamp) # add
 
         # create batch slices
         self.batch_slices = _create_ts_slices(self._index, self.seq_len)
@@ -252,10 +291,10 @@ class MTSDatasetH(DatasetH):
 
         # self.stock_slices = {}
         # for stock in sorted(act_index.unique(level=0)):
-        #     # 筛选当前股票的所有切片
+        #     # select all slices for the current stock
         #     mask = act_index.get_level_values(0) == stock
         #     self.stock_slices[stock] = [self.batch_slices[i] for i in np.where(mask)[0]]
-        # self.stock_slices = list(self.stock_slices.values())  # 转换为列表
+        # self.stock_slices = list(self.stock_slices.values())  # convert to list
 
     def _prepare_seg(self, slc, **kwargs):
 
@@ -264,22 +303,22 @@ class MTSDatasetH(DatasetH):
         if isinstance(slc, slice):
             start, stop = slc.start, slc.stop
         elif isinstance(slc, (list, tuple)):
-            start, stop = slc # 划分时间
+            start, stop = slc # time split
         else:
             raise NotImplementedError(f"This type of input is not supported")
         start_date = fn(start)
         end_date = fn(stop)
         obj = copy.copy(self)  # shallow copy
         # NOTE: Seriable will disable copy `self._data` so we manually assign them here
-        obj._data = self._data # 按照股票顺序排
-        obj._label = self._label # 按照股票顺序排
-        obj._index = self._index # 按照股票顺序排
+        obj._data = self._data # ordered by stock
+        obj._label = self._label # ordered by stock
+        obj._index = self._index # ordered by stock
         obj._timestamp = self._timestamp # add
         new_batch_slices = []
         for batch_slc in self.batch_slices:
             date = self._index[batch_slc.stop - 1][1]
             if start_date <= date <= end_date:
-                new_batch_slices.append(batch_slc) # 划分train val test 时间
+                new_batch_slices.append(batch_slc) # split train/val/test by time
         obj.batch_slices = np.array(new_batch_slices)
 
         new_daily_slices = []
@@ -352,21 +391,24 @@ class MTSDatasetH(DatasetH):
             data = []
             label = []
             index = []
-            timestamp_feature = []
+            timestamp_feature = [] if self.use_timestamp else None
             for slc in slices_subset:
                 _data = self._data[slc].clone() if self.pin_memory else self._data[slc].copy()
-                _timestamp = self._timestamp[slc].clone() if self.pin_memory else self._timestamp[slc].copy()
+                if self.use_timestamp:
+                    _timestamp = self._timestamp[slc].clone() if self.pin_memory else self._timestamp[slc].copy()
                 if len(_data) != self.seq_len:
                     if self.pin_memory:
                         _data = torch.cat([self.zeros[: self.seq_len - len(_data)], _data], axis=0)
-                        _timestamp = torch.cat([self.zeros_timestamp[: self.seq_len - len(_timestamp)], _timestamp], axis=0) # add
+                        if self.use_timestamp:
+                            _timestamp = torch.cat([self.zeros_timestamp[: self.seq_len - len(_timestamp)], _timestamp], axis=0) # add
                     else:
                         _data = np.concatenate([self.zeros[: self.seq_len - len(_data)], _data], axis=0)
-                        _timestamp = np.concatenate([self.zeros_timestamp[: self.seq_len - len(_timestamp)], _timestamp], axis=0) # add
+                        if self.use_timestamp:
+                            _timestamp = np.concatenate([self.zeros_timestamp[: self.seq_len - len(_timestamp)], _timestamp], axis=0) # add
                 _data[-self.horizon :, -1 :] = 0
-                _timestamp[-self.horizon:, -1:] = 0 # add
                 data.append(_data)
-                timestamp_feature.append(_timestamp) # add
+                if self.use_timestamp:
+                    timestamp_feature.append(_timestamp) # add
                 label.append(self._label[slc.stop - 1])
                 index.append(slc.stop - 1)
 
@@ -375,12 +417,14 @@ class MTSDatasetH(DatasetH):
             index = torch.tensor(index, device=device)
             if isinstance(data[0], torch.Tensor):
                 data = torch.stack(data)
-                timestamp_feature = torch.stack(timestamp_feature)
                 label = torch.stack(label)
+                if self.use_timestamp:
+                    timestamp_feature = torch.stack(timestamp_feature)
             else:
                 data = _to_tensor(np.stack(data))
-                timestamp_feature = _to_tensor(np.stack(timestamp_feature))
                 label = _to_tensor(np.stack(label))
+                if self.use_timestamp:
+                    timestamp_feature = _to_tensor(np.stack(timestamp_feature))
             # yield -> generator
 
             yield {"data": data, "label": label, "index": index, 'timestamp_feature': timestamp_feature}

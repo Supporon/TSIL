@@ -44,7 +44,7 @@ class GAT(nn.Module):
         self.fc = nn.Linear(self.hidden_size, self.hidden_size)
         self.leaky_relu = nn.LeakyReLU()
         self.softmax = nn.Softmax(dim=1)
-        self.alpha = torch.nn.Parameter(torch.tensor(configs.tau_hat_init))  # 可学习的tau_hat参数
+        self.alpha = torch.nn.Parameter(torch.tensor(configs.tau_hat_init))  # learnable tau_hat parameter
 
         self.projection = nn.Sequential(
                 nn.Linear(self.hidden_size, self.d_ff, bias=True),

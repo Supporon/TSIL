@@ -1,0 +1,130 @@
+
+qlib_init:
+    provider_uri: "./qlib_data/cn_data"
+    region: cn
+
+market: &market csi300
+benchmark: &benchmark SH000300
+logdir: &logdir output_f158_csi300/master
+seq_len: &seq_len 20
+
+model_config: &model_config
+  # phi_type drives the loss (no loss_type field): mse=plain MSE | ones=Φ_ones control | <temporal>=TSIL
+  phi_type: mse
+  seq_len: *seq_len
+  pred_len: 1
+  # MASTER-specific parameters
+  d_feat: 158           # number of input features
+  d_model: 256          # hidden dimension
+  t_nhead: 4            # temporal attention heads
+  s_nhead: 2            # stock attention heads
+  T_dropout_rate: 0.5   # temporal attention dropout
+  S_dropout_rate: 0.5   # stock attention dropout
+  gate_input_start_index: 158  # gate input start index (auto-disabled when no market info)
+  gate_input_end_index: 221    # gate input end index
+  beta: 5               # gate temperature
+  use_gate: False       # use the market-feature gate (False when no market info)
+  # generic parameters
+  enc_in: 158
+  c_out: 1
+  d_ff: 256
+  n_heads: 4
+  dropout: 0.5
+  use_attn: True
+  noise_level: 0.0
+  tau_hat_init: 0.0
+  plot_show: False
+
+
+data_handler_config: &data_handler_config
+    start_time: 2018-01-01
+    end_time: 2025-08-31
+    fit_start_time: 2018-01-01
+    fit_end_time: 2022-12-31
+    instruments: *market
+    infer_processors:
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+        - class: Fillna
+          kwargs:
+              fields_group: feature
+    learn_processors:
+        - class: DropnaLabel
+        - class: CSRankNorm
+          kwargs:
+              fields_group: label
+    label: ["Ref($close, -2) / Ref($close, -1) - 1"]
+
+port_analysis_config: &port_analysis_config
+    strategy:
+        class: TopkDropoutStrategy
+        module_path: qlib.contrib.strategy
+        kwargs:
+            signal: <PRED>
+            topk: 50
+            n_drop: 5
+    backtest:
+        start_time: 2024-01-01
+        end_time: 2025-08-31
+        account: 100000000
+        benchmark: *benchmark
+        exchange_kwargs:
+            limit_threshold: 0.095
+            deal_price: close
+            open_cost: 0.0005
+            close_cost: 0.0015
+            min_cost: 5
+
+task:
+    model:
+      class: QniverseModel
+      module_path: src/model_backbone_phitp.py
+      kwargs:
+        lr: 1e-4
+        n_epochs: 50
+        max_steps_per_epoch: 5000
+        early_stop: 10
+        seed: 2025
+        logdir: *logdir
+        model_type: MASTER
+        model_config: *model_config
+        freeze_model: False
+    dataset:
+      class: MTSDatasetH
+      module_path: src/dataset_ori_onehot.py
+      kwargs:
+        handler:
+          class: Alpha158
+          module_path: qlib.contrib.data.handler
+          kwargs: *data_handler_config
+        segments:
+          train: [ 2018-01-01, 2022-12-31 ]
+          valid: [ 2023-01-01, 2023-12-31 ]
+          test: [ 2024-01-01, 2025-08-31 ]
+        seq_len: *seq_len
+        horizon: 1
+        batch_size: 800
+        shuffle: True
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            model: <MODEL>
+            dataset: <DATASET>
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            ana_long_short: False
+            ann_scaler: 252
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            config: *port_analysis_config
+
+
+strategy_config: &strategy_config
+  topk: 50
+  hold_thre: 5
+  commission_rate: 0.001

@@ -5,16 +5,21 @@ Runs one backbone on one market through train -> predict -> backtest -> report.
 Usage
 -----
 All parameters from the YAML:
-    python train.py --config_file configs/f158_ts_2025_csi300/config_lstm_ts_phi.yaml
+    python train.py --config_file configs/f158_csi300/config_lstm.yaml
 
 Override YAML fields from the command line (any omitted flag keeps the YAML value):
-    python train.py --config_file configs/f158_ts_2025_csi300/config_lstm_ts_phi.yaml \
-        --loss_type MSE_with_weak --phi_type phi_momentum --base_model LSTM \
-        --tau_hat_init 2.0 --seed 42
+    python train.py --config_file configs/f158_csi300/config_lstm.yaml \
+        --phi_type phi_momentum --tau_hat_init 2.0 --market csi800 --seed 42
 
-Modes (selected by --loss_type / --phi_type):
-    ori : --loss_type MSELoss
-    phi : --loss_type MSE_with_weak --phi_type <key>   (e.g. phi_momentum)
+The loss mode is driven entirely by --phi_type (there is no separate loss_type):
+    mse         -> plain MSE                         (the Original baseline; config default)
+    ones        -> weighted MSE with the Phi_ones control predicate
+    <temporal>  -> weighted MSE with a paper temporal predicate, e.g. phi_momentum,
+                   phi_volatility, phi_return_dist, phi_cycle, phi_phase,
+                   phi_timestamp
+
+Each backbone ships one config per market (config_<model>.yaml); the same
+config becomes any mode via --phi_type, and any market via --market.
 
 --seed accepts multiple values; each is run in turn. Default seeds: 42 2022 2023 2024 2025.
 """
@@ -75,6 +80,7 @@ def main(seed, config, config_file):
     qlib.init(
         provider_uri=config["qlib_init"]["provider_uri"],
         region=config["qlib_init"]["region"],
+        kernels=1, # single-process load when debugging, so fork doesn't break debugpy's socket
     )
 
     exp_settings = config.get("experiment_settings", {
@@ -93,6 +99,10 @@ def main(seed, config, config_file):
         logdir = config["task"]["model"]["kwargs"]["logdir"]
         model_type = config["task"]["model"]["kwargs"]["model_type"]
 
+        # The dataset extracts calendar/timestamp features only when the loss uses
+        # the timestamp predicate. phi_type lives in model_config, so pass it through
+        # to the dataset kwargs before instantiation.
+        config["task"]["dataset"]["kwargs"]["phi_type"] = config["model_config"].get("phi_type")
         dataset = init_instance_by_config(config["task"]["dataset"])
         model = init_instance_by_config(config["task"]["model"])
 
@@ -174,17 +184,16 @@ def build_argparser():
     p.add_argument("--seed", type=int, nargs="+", default=DEFAULT_SEEDS,
                    help="one or more random seeds (default: 42 2022 2023 2024 2025)")
     # YAML overrides (None => keep the value in the config file)
-    p.add_argument("--loss_type", type=str, default=None,
-                   choices=["MSELoss", "MSE_with_weak", "RankMSELoss"],
-                   help="MSELoss = Original, MSE_with_weak = TSIL")
-    p.add_argument("--phi_type", type=str, default=None, help="predicate key, e.g. phi_momentum")
+    p.add_argument("--phi_type", type=str, default=None,
+                   help="loss/predicate selector: mse (plain MSE) | ones (Phi_ones "
+                        "control) | a temporal predicate key, e.g. phi_momentum")
     p.add_argument("--base_model", type=str, default=None, help="base RNN for LSR_IGRU")
     p.add_argument("--tau_hat_init", type=float, default=None)
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--d_model", type=int, default=None)
     p.add_argument("--e_layers", type=int, default=None)
     p.add_argument("--batch_size", type=int, default=None)
-    p.add_argument("--market", type=str, default=None, choices=["csi300", "csi500", "csi800"])
+    p.add_argument("--market", type=str, default=None, choices=["csi300", "csi800"])
     return p
 
 
@@ -200,7 +209,6 @@ if __name__ == "__main__":
     for seed in seeds:
         print("=" * 60)
         print(f"[run] config={args.config_file} seed={seed} "
-              f"loss={config['model_config']['loss_type']} "
               f"phi={config['model_config'].get('phi_type')}")
         print("=" * 60)
         main(seed, config, args.config_file)

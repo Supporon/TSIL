@@ -8,7 +8,7 @@ avoiding leakage; they are reported only for the chosen configuration.
 
 Usage
 -----
-    python search.py --config_file configs/config_lstm_search.yaml \
+    python search.py --config_file configs/f158_csi300/config_lstm.yaml \
         --models LSTM GRU --phi_types phi_momentum --market csi300 --n_trials 50
 
 Requires `optuna` (see requirements.txt).
@@ -96,6 +96,9 @@ def _train_one(config, model_type):
 
     with R.start(experiment_name=f"{model_type}_search",
                  recorder_name=f"trial"):
+        # phi_type lives in model_config; pass it to the dataset so it only
+        # extracts timestamp features for the timestamp predicate.
+        config["task"]["dataset"]["kwargs"]["phi_type"] = config["model_config"].get("phi_type")
         dataset = init_instance_by_config(config["task"]["dataset"])
         model = init_instance_by_config(config["task"]["model"])
         _, metrics = model.fit(dataset)
