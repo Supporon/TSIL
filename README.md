@@ -76,8 +76,8 @@ release/
 │   ├── dataset_ori_onehot.py       # MTSDatasetH time-series dataset loader (phi_type-aware)
 │   ├── timefeatures.py             # timestamp feature construction
 │   └── models/                     # 11 backbone implementations
-│       ├── LSTM.py  GRU.py  TCN.py  Transformer.py  GAT.py  GCN.py  PatchTST.py  # domain-agnostic
-│       └── LSR_IGRU.py  master.py  MERA.py  StockMixer.py                        # stock-specialized
+│       ├── LSTM.py  GRU.py  TCN.py  Transformer.py  GAT.py  # domain-agnostic
+│       └── LSR_IGRU.py  MASTER.py  MERA.py  StockMixer.py   # stock-specialized
 ├── configs/
 │   ├── f158_csi300/                # CSI 300, one config per backbone (9 models, loss via --phi_type)
 │   └── f158_csi800/                # CSI 800, one config per backbone (9 models, loss via --phi_type)
