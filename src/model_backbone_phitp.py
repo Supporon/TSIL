@@ -70,14 +70,13 @@ from src.temporal_predicates import get_temporal_I_P, TEMPORAL_PHI_TYPES
 
 # Alternate implementation of the paper's predicates in src/custom_phi_constructors.py.
 # Optional: if the module is present, these keys can also be served from it. The
-# whitelist below is the paper's set only: the six temporal predicates plus the
-# Phi_ones control.
+# whitelist below contains only the six temporal predicates; the Phi_ones control
+# is handled by WeightedMSELoss.get_ones_I_P.
 try:
     from src.custom_phi_constructors import get_custom_I_P
     _CUSTOM_PHI_TYPES = {
         'phi_timestamp', 'phi_cycle', 'phi_phase',
         'phi_momentum', 'phi_volatility', 'phi_return_dist',
-        'ones',
     }
     _CUSTOM_PHI_AVAILABLE = True
 except ImportError:
