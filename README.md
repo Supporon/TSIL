@@ -182,7 +182,7 @@ Available command-line overrides:
 --phi_type --injection_mode --penalty_alpha --base_model --lr --d_model --e_layers --batch_size --market --seed
 ```
 
-`--seed` accepts one or more integers. Without an override, the configured seed is used; the fallback seed set is `42 2022 2023 2024 2025`. Each run has a separate output path containing its seed and configuration digest.
+`--seed` accepts one or more integers. For training runs without `--seed`, `train.py` runs all five default seeds: `42 2022 2023 2024 2025`. With `--checkpoint` and no `--seed`, evaluation uses the seed from the saved configuration. Each run has a separate output path containing its seed and configuration digest.
 
 ### 5.2 Hyper-parameter search with `search.py`
 
