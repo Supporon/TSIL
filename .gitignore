@@ -7,6 +7,9 @@ smoke_out/
 output_search*/
 output_f158*/
 baseline_output*/
+verification_output/
+*_verification.log
+review_regressions_before.log
 output_phi*/
 */experiments/
 verify/_min_out/
@@ -19,6 +22,8 @@ training_data*.csv
 *.html
 
 # Python
+.venv/
+.pytest_cache/
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/

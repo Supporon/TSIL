@@ -240,7 +240,6 @@ class MERA(nn.Module):
             - top_k: Top-k experts to route to (default: 4)
             - gate_dim: Gate embedding dimension (default: 16)
             - noise_level: Noise level for initialization (default: 0.0)
-            - tau_hat_init: Initial tau value (default: 0.0)
     """
     
     def __init__(self, configs):
@@ -260,10 +259,6 @@ class MERA(nn.Module):
         self.gate_dim = getattr(configs, 'gate_dim', 16)
         self.noise_level = getattr(configs, 'noise_level', 0.0)
         
-        # Learnable parameter for loss weighting (similar to LSTM)
-        self.alpha = nn.Parameter(
-            torch.tensor(float(getattr(configs, 'tau_hat_init', 0.0)), dtype=torch.float32)
-        )
         
         # Input projection
         self.input_proj = nn.Linear(self.input_size, self.hidden_size)

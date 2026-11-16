@@ -1,0 +1,295 @@
+[29596:MainThread](2026-10-26 15:02:00,528) INFO - qlib.Initialization - [config.py:420] - default_conf: client.
+[29596:MainThread](2026-10-26 15:02:09,118) INFO - qlib.Initialization - [__init__.py:74] - qlib successfully initialized based on client settings.
+[29596:MainThread](2026-10-26 15:02:09,120) INFO - qlib.Initialization - [__init__.py:76] - data_path={'__DEFAULT_FREQ': WindowsPath('C:/Users/֣����/Documents/TSIL����/TSIL_paper_aligned_20261025/verification_output/synthetic/market')}
+[29596:MainThread](2026-10-26 15:02:09,399) WARNING - qlib.online operator - [exchange.py:219] - $close * 1.0001 field data contains nan.
+[29596:MainThread](2026-10-26 15:02:09,400) WARNING - qlib.online operator - [exchange.py:219] - $close * 0.9999 field data contains nan.
+[29596:MainThread](2026-10-26 15:02:33,295) INFO - qlib.timer - [log.py:127] - Time cost: 23.795s | Loading data Done
+[29596:MainThread](2026-10-26 15:02:33,778) INFO - qlib.timer - [log.py:127] - Time cost: 0.476s | CSZScoreNorm Done
+[29596:MainThread](2026-10-26 15:02:33,792) INFO - qlib.timer - [log.py:127] - Time cost: 0.012s | Fillna Done
+[29596:MainThread](2026-10-26 15:02:33,812) INFO - qlib.timer - [log.py:127] - Time cost: 0.020s | DropnaLabel Done
+[29596:MainThread](2026-10-26 15:02:33,814) INFO - qlib.timer - [log.py:127] - Time cost: 0.517s | fit & process data Done
+[29596:MainThread](2026-10-26 15:02:33,815) INFO - qlib.timer - [log.py:127] - Time cost: 24.315s | Init data Done
+[29596:MainThread](2026-10-26 15:02:35,973) INFO - qlib.Qniverse - [model_backbone_phitp.py:81] - Qniverse Model...
+[29596:MainThread](2026-10-26 15:02:35,976) INFO - qlib.Qniverse - [model_backbone_phitp.py:110] - # model params: 5457
+[29596:MainThread](2026-10-26 15:02:38,264) INFO - qlib.Qniverse - [model_backbone_phitp.py:444] - Epoch 0:
+[29596:MainThread](2026-10-26 15:02:38,264) INFO - qlib.Qniverse - [model_backbone_phitp.py:446] - training...
+[29596:MainThread](2026-10-26 15:02:38,492) INFO - qlib.Qniverse - [model_backbone_phitp.py:449] - evaluating...
+[29596:MainThread](2026-10-26 15:02:38,586) INFO - qlib.Qniverse - [model_backbone_phitp.py:457] - 	valid metrics: {'MSE': 0.06478107, 'MAE': 0.24657151, 'IC': 0.0175117713096016, 'Rank_IC': -0.002992329308118784, 'sample_count': 504, 'prediction_count': 504, 'ICIR': 0.1398712810627209, 'RankICIR': -0.02920164400855694, 'RankIC': -0.002992329308118784, 'InfT_ms_per_sample': 0.045534722233689595, 'InfT': 0.045534722233689595}
+[29596:MainThread](2026-10-26 15:02:38,586) INFO - qlib.Qniverse - [model_backbone_phitp.py:465] - 	valid ic increased: inf
+[29596:MainThread](2026-10-26 15:02:38,588) INFO - qlib.Qniverse - [model_backbone_phitp.py:521] - best score: 0.017512 @ 0
+[29596:MainThread](2026-10-26 15:02:38,589) INFO - qlib.Qniverse - [model_backbone_phitp.py:529] - test metrics: {'best_epoch': 0, 'best_score': 0.0175117713096016}
+[29596:MainThread](2026-10-26 15:02:38,589) INFO - qlib.Qniverse - [model_backbone_phitp.py:532] - save model & pred to local directory
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+[29596:MainThread](2026-10-26 15:02:38,858) INFO - qlib.backtest caller - [__init__.py:93] - Create new exchange
+[29596:MainThread](2026-10-26 15:02:39,917) WARNING - qlib.data - [data.py:665] - load calendar error: freq=day, future=True; return current calendar!
+[29596:MainThread](2026-10-26 15:02:39,918) WARNING - qlib.data - [data.py:668] - You can get future calendar by referring to the following document: https://github.com/microsoft/qlib/blob/main/scripts/data_collector/contrib/README.md
+[29596:MainThread](2026-10-26 15:02:39,921) WARNING - qlib.BaseExecutor - [executor.py:121] - `common_infra` is not set for <qlib.backtest.executor.SimulatorExecutor object at 0x00000197958CA720>
+
+backtest loop:   0%|          | 0/10 [00:00<?, ?it/s]C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\qlib\utils\index_data.py:492: RuntimeWarning: Mean of empty slice
+  return np.nanmean(self.data)
+
+backtest loop:  40%|��������      | 4/10 [00:00<00:00, 37.47it/s]
+backtest loop:  80%|����������������  | 8/10 [00:00<00:00, 36.11it/s]
+backtest loop: 100%|��������������������| 10/10 [00:00<00:00, 34.40it/s]
+[29596:MainThread](2026-10-26 15:03:05,279) INFO - qlib.timer - [log.py:127] - Time cost: 24.999s | Loading data Done
+[29596:MainThread](2026-10-26 15:03:05,734) INFO - qlib.timer - [log.py:127] - Time cost: 0.450s | CSZScoreNorm Done
+[29596:MainThread](2026-10-26 15:03:05,744) INFO - qlib.timer - [log.py:127] - Time cost: 0.009s | Fillna Done
+[29596:MainThread](2026-10-26 15:03:05,762) INFO - qlib.timer - [log.py:127] - Time cost: 0.016s | DropnaLabel Done
+[29596:MainThread](2026-10-26 15:03:05,762) INFO - qlib.timer - [log.py:127] - Time cost: 0.483s | fit & process data Done
+[29596:MainThread](2026-10-26 15:03:05,765) INFO - qlib.timer - [log.py:127] - Time cost: 25.485s | Init data Done
+[29596:MainThread](2026-10-26 15:03:06,721) INFO - qlib.Qniverse - [model_backbone_phitp.py:81] - Qniverse Model...
+[29596:MainThread](2026-10-26 15:03:06,776) INFO - qlib.Qniverse - [model_backbone_phitp.py:110] - # model params: 5553
+[29596:MainThread](2026-10-26 15:03:07,000) INFO - qlib.Qniverse - [model_backbone_phitp.py:444] - Epoch 0:
+[29596:MainThread](2026-10-26 15:03:07,000) INFO - qlib.Qniverse - [model_backbone_phitp.py:446] - training...
+[29596:MainThread](2026-10-26 15:03:07,192) INFO - qlib.Qniverse - [model_backbone_phitp.py:449] - evaluating...
+[29596:MainThread](2026-10-26 15:03:07,327) INFO - qlib.Qniverse - [model_backbone_phitp.py:457] - 	valid metrics: {'MSE': 0.021808492, 'MAE': 0.13275388, 'IC': 0.006768496286543208, 'Rank_IC': -0.010746563378142325, 'sample_count': 504, 'prediction_count': 504, 'ICIR': 0.0417933450266335, 'RankICIR': -0.07530264979598515, 'RankIC': -0.010746563378142325, 'InfT_ms_per_sample': 0.07940337300602723, 'InfT': 0.07940337300602723}
+[29596:MainThread](2026-10-26 15:03:07,329) INFO - qlib.Qniverse - [model_backbone_phitp.py:465] - 	valid ic increased: inf
+[29596:MainThread](2026-10-26 15:03:07,332) INFO - qlib.Qniverse - [model_backbone_phitp.py:521] - best score: 0.006768 @ 0
+[29596:MainThread](2026-10-26 15:03:07,333) INFO - qlib.Qniverse - [model_backbone_phitp.py:529] - test metrics: {'best_epoch': 0, 'best_score': 0.006768496286543208}
+[29596:MainThread](2026-10-26 15:03:07,334) INFO - qlib.Qniverse - [model_backbone_phitp.py:532] - save model & pred to local directory
+[29596:MainThread](2026-10-26 15:03:07,724) INFO - qlib.backtest caller - [__init__.py:93] - Create new exchange
+[29596:MainThread](2026-10-26 15:03:08,849) WARNING - qlib.BaseExecutor - [executor.py:121] - `common_infra` is not set for <qlib.backtest.executor.SimulatorExecutor object at 0x000001978D0B7680>
+
+backtest loop:   0%|          | 0/10 [00:00<?, ?it/s]C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\qlib\utils\index_data.py:492: RuntimeWarning: Mean of empty slice
+  return np.nanmean(self.data)
+
+backtest loop:  20%|����        | 2/10 [00:00<00:00, 15.77it/s]
+backtest loop:  60%|������������    | 6/10 [00:00<00:00, 27.08it/s]
+backtest loop:  90%|������������������ | 9/10 [00:00<00:00, 22.78it/s]
+backtest loop: 100%|��������������������| 10/10 [00:00<00:00, 22.68it/s]
+[29596:MainThread](2026-10-26 15:03:33,049) INFO - qlib.timer - [log.py:127] - Time cost: 23.717s | Loading data Done
+[29596:MainThread](2026-10-26 15:03:33,512) INFO - qlib.timer - [log.py:127] - Time cost: 0.458s | CSZScoreNorm Done
+[29596:MainThread](2026-10-26 15:03:33,523) INFO - qlib.timer - [log.py:127] - Time cost: 0.011s | Fillna Done
+[29596:MainThread](2026-10-26 15:03:33,544) INFO - qlib.timer - [log.py:127] - Time cost: 0.018s | DropnaLabel Done
+[29596:MainThread](2026-10-26 15:03:33,546) INFO - qlib.timer - [log.py:127] - Time cost: 0.497s | fit & process data Done
+[29596:MainThread](2026-10-26 15:03:33,548) INFO - qlib.timer - [log.py:127] - Time cost: 24.217s | Init data Done
+[29596:MainThread](2026-10-26 15:03:34,604) INFO - qlib.Qniverse - [model_backbone_phitp.py:81] - Qniverse Model...
+[29596:MainThread](2026-10-26 15:03:34,609) INFO - qlib.Qniverse - [model_backbone_phitp.py:110] - # model params: 5457
+[29596:MainThread](2026-10-26 15:03:34,825) INFO - qlib.Qniverse - [model_backbone_phitp.py:444] - Epoch 0:
+[29596:MainThread](2026-10-26 15:03:34,827) INFO - qlib.Qniverse - [model_backbone_phitp.py:446] - training...
+[29596:MainThread](2026-10-26 15:03:35,022) INFO - qlib.Qniverse - [model_backbone_phitp.py:449] - evaluating...
+[29596:MainThread](2026-10-26 15:03:35,152) INFO - qlib.Qniverse - [model_backbone_phitp.py:457] - 	valid metrics: {'MSE': 0.064772785, 'MAE': 0.24654174, 'IC': 0.01753005083596906, 'Rank_IC': -0.0031670084301663242, 'sample_count': 504, 'prediction_count': 504, 'ICIR': 0.14004101732234786, 'RankICIR': -0.030942181310268397, 'RankIC': -0.0031670084301663242, 'InfT_ms_per_sample': 0.06474503968655924, 'InfT': 0.06474503968655924}
+[29596:MainThread](2026-10-26 15:03:35,153) INFO - qlib.Qniverse - [model_backbone_phitp.py:465] - 	valid ic increased: inf
+[29596:MainThread](2026-10-26 15:03:35,156) INFO - qlib.Qniverse - [model_backbone_phitp.py:521] - best score: 0.017530 @ 0
+[29596:MainThread](2026-10-26 15:03:35,158) INFO - qlib.Qniverse - [model_backbone_phitp.py:529] - test metrics: {'best_epoch': 0, 'best_score': 0.01753005083596906}
+[29596:MainThread](2026-10-26 15:03:35,159) INFO - qlib.Qniverse - [model_backbone_phitp.py:532] - save model & pred to local directory
+[29596:MainThread](2026-10-26 15:03:35,586) INFO - qlib.backtest caller - [__init__.py:93] - Create new exchange
+[29596:MainThread](2026-10-26 15:03:36,778) WARNING - qlib.BaseExecutor - [executor.py:121] - `common_infra` is not set for <qlib.backtest.executor.SimulatorExecutor object at 0x000001978D088E30>
+
+backtest loop:   0%|          | 0/10 [00:00<?, ?it/s]C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\qlib\utils\index_data.py:492: RuntimeWarning: Mean of empty slice
+  return np.nanmean(self.data)
+
+backtest loop:  20%|����        | 2/10 [00:00<00:00, 15.65it/s]
+backtest loop:  60%|������������    | 6/10 [00:00<00:00, 25.50it/s]
+backtest loop:  90%|������������������ | 9/10 [00:00<00:00, 24.19it/s]
+backtest loop: 100%|��������������������| 10/10 [00:00<00:00, 24.02it/s]
+[29596:MainThread](2026-10-26 15:03:37,318) INFO - qlib.Initialization - [config.py:420] - default_conf: client.
+[29596:MainThread](2026-10-26 15:03:37,322) INFO - qlib.Initialization - [__init__.py:74] - qlib successfully initialized based on client settings.
+[29596:MainThread](2026-10-26 15:03:37,325) INFO - qlib.Initialization - [__init__.py:76] - data_path={'__DEFAULT_FREQ': WindowsPath('C:/Users/֣����/Documents/TSIL����/TSIL_paper_aligned_20261025/verification_output/synthetic/market')}
+[29596:MainThread](2026-10-26 15:03:59,977) INFO - qlib.timer - [log.py:127] - Time cost: 22.649s | Loading data Done
+[29596:MainThread](2026-10-26 15:04:00,436) INFO - qlib.timer - [log.py:127] - Time cost: 0.452s | CSZScoreNorm Done
+[29596:MainThread](2026-10-26 15:04:00,448) INFO - qlib.timer - [log.py:127] - Time cost: 0.011s | Fillna Done
+[29596:MainThread](2026-10-26 15:04:00,466) INFO - qlib.timer - [log.py:127] - Time cost: 0.017s | DropnaLabel Done
+[29596:MainThread](2026-10-26 15:04:00,470) INFO - qlib.timer - [log.py:127] - Time cost: 0.490s | fit & process data Done
+[29596:MainThread](2026-10-26 15:04:00,471) INFO - qlib.timer - [log.py:127] - Time cost: 23.141s | Init data Done
+[29596:MainThread](2026-10-26 15:04:00,924) INFO - qlib.Qniverse - [model_backbone_phitp.py:81] - Qniverse Model...
+[29596:MainThread](2026-10-26 15:04:00,927) INFO - qlib.Qniverse - [model_backbone_phitp.py:110] - # model params: 5457
+[29596:MainThread](2026-10-26 15:04:00,929) WARNING - qlib.Qniverse - [model_backbone_phitp.py:131] - logdir C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\verification_output\synthetic\selection\LSTM\network\0\original_seed2025_6b03ea2c543d is not empty
+[29596:MainThread](2026-10-26 15:04:01,138) INFO - qlib.Qniverse - [model_backbone_phitp.py:444] - Epoch 0:
+[29596:MainThread](2026-10-26 15:04:01,140) INFO - qlib.Qniverse - [model_backbone_phitp.py:446] - training...
+[29596:MainThread](2026-10-26 15:04:01,332) INFO - qlib.Qniverse - [model_backbone_phitp.py:449] - evaluating...
+[29596:MainThread](2026-10-26 15:04:01,462) INFO - qlib.Qniverse - [model_backbone_phitp.py:457] - 	valid metrics: {'MSE': 0.004774208, 'MAE': 0.056585886, 'IC': 0.04714856696057121, 'Rank_IC': 0.02837396521607047, 'sample_count': 504, 'prediction_count': 504, 'ICIR': 0.33202550249582485, 'RankICIR': 0.19509852186531873, 'RankIC': 0.02837396521607047, 'InfT_ms_per_sample': 0.061788293654293135, 'InfT': 0.061788293654293135}
+[29596:MainThread](2026-10-26 15:04:01,464) INFO - qlib.Qniverse - [model_backbone_phitp.py:465] - 	valid ic increased: inf
+[29596:MainThread](2026-10-26 15:04:01,467) INFO - qlib.Qniverse - [model_backbone_phitp.py:521] - best score: 0.047149 @ 0
+[29596:MainThread](2026-10-26 15:04:01,468) INFO - qlib.Qniverse - [model_backbone_phitp.py:529] - test metrics: {'best_epoch': 0, 'best_score': 0.04714856696057121}
+[29596:MainThread](2026-10-26 15:04:01,469) INFO - qlib.Qniverse - [model_backbone_phitp.py:532] - save model & pred to local directory
+[29596:MainThread](2026-10-26 15:04:01,524) INFO - qlib.Initialization - [config.py:420] - default_conf: client.
+[29596:MainThread](2026-10-26 15:04:01,531) INFO - qlib.Initialization - [__init__.py:74] - qlib successfully initialized based on client settings.
+[29596:MainThread](2026-10-26 15:04:01,532) INFO - qlib.Initialization - [__init__.py:76] - data_path={'__DEFAULT_FREQ': WindowsPath('C:/Users/֣����/Documents/TSIL����/TSIL_paper_aligned_20261025/verification_output/synthetic/market')}
+[29596:MainThread](2026-10-26 15:04:24,410) INFO - qlib.timer - [log.py:127] - Time cost: 22.874s | Loading data Done
+[29596:MainThread](2026-10-26 15:04:24,833) INFO - qlib.timer - [log.py:127] - Time cost: 0.415s | CSZScoreNorm Done
+[29596:MainThread](2026-10-26 15:04:24,845) INFO - qlib.timer - [log.py:127] - Time cost: 0.011s | Fillna Done
+[29596:MainThread](2026-10-26 15:04:24,861) INFO - qlib.timer - [log.py:127] - Time cost: 0.014s | DropnaLabel Done
+[29596:MainThread](2026-10-26 15:04:24,862) INFO - qlib.timer - [log.py:127] - Time cost: 0.451s | fit & process data Done
+[29596:MainThread](2026-10-26 15:04:24,864) INFO - qlib.timer - [log.py:127] - Time cost: 23.327s | Init data Done
+[29596:MainThread](2026-10-26 15:04:25,403) INFO - qlib.Qniverse - [model_backbone_phitp.py:81] - Qniverse Model...
+[29596:MainThread](2026-10-26 15:04:25,406) INFO - qlib.Qniverse - [model_backbone_phitp.py:110] - # model params: 5457
+[29596:MainThread](2026-10-26 15:04:25,410) WARNING - qlib.Qniverse - [model_backbone_phitp.py:131] - logdir C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\verification_output\synthetic\selection\LSTM\predicates\phi_momentum\alpha-4.0\tsil_seed42_562d35f20bf1 is not empty
+[29596:MainThread](2026-10-26 15:04:25,616) INFO - qlib.Qniverse - [model_backbone_phitp.py:444] - Epoch 0:
+[29596:MainThread](2026-10-26 15:04:25,617) INFO - qlib.Qniverse - [model_backbone_phitp.py:446] - training...
+[29596:MainThread](2026-10-26 15:04:25,804) INFO - qlib.Qniverse - [model_backbone_phitp.py:449] - evaluating...
+[29596:MainThread](2026-10-26 15:04:25,928) INFO - qlib.Qniverse - [model_backbone_phitp.py:457] - 	valid metrics: {'MSE': 0.064781085, 'MAE': 0.24657156, 'IC': 0.017511946876393757, 'Rank_IC': -0.002992329308118784, 'sample_count': 504, 'prediction_count': 504, 'ICIR': 0.13987261424853129, 'RankICIR': -0.02920164400855694, 'RankIC': -0.002992329308118784, 'InfT_ms_per_sample': 0.06815238095932438, 'InfT': 0.06815238095932438}
+[29596:MainThread](2026-10-26 15:04:25,929) INFO - qlib.Qniverse - [model_backbone_phitp.py:465] - 	valid ic increased: inf
+[29596:MainThread](2026-10-26 15:04:25,932) INFO - qlib.Qniverse - [model_backbone_phitp.py:521] - best score: 0.017512 @ 0
+[29596:MainThread](2026-10-26 15:04:25,934) INFO - qlib.Qniverse - [model_backbone_phitp.py:529] - test metrics: {'best_epoch': 0, 'best_score': 0.017511946876393757}
+[29596:MainThread](2026-10-26 15:04:25,935) INFO - qlib.Qniverse - [model_backbone_phitp.py:532] - save model & pred to local directory
+[29596:MainThread](2026-10-26 15:04:26,009) INFO - qlib.Initialization - [config.py:420] - default_conf: client.
+[29596:MainThread](2026-10-26 15:04:26,014) INFO - qlib.Initialization - [__init__.py:74] - qlib successfully initialized based on client settings.
+[29596:MainThread](2026-10-26 15:04:26,015) INFO - qlib.Initialization - [__init__.py:76] - data_path={'__DEFAULT_FREQ': WindowsPath('C:/Users/֣����/Documents/TSIL����/TSIL_paper_aligned_20261025/verification_output/synthetic/market')}
+[29596:MainThread](2026-10-26 15:04:49,247) INFO - qlib.timer - [log.py:127] - Time cost: 23.226s | Loading data Done
+[29596:MainThread](2026-10-26 15:04:49,684) INFO - qlib.timer - [log.py:127] - Time cost: 0.430s | CSZScoreNorm Done
+[29596:MainThread](2026-10-26 15:04:49,696) INFO - qlib.timer - [log.py:127] - Time cost: 0.011s | Fillna Done
+[29596:MainThread](2026-10-26 15:04:49,711) INFO - qlib.timer - [log.py:127] - Time cost: 0.015s | DropnaLabel Done
+[29596:MainThread](2026-10-26 15:04:49,713) INFO - qlib.timer - [log.py:127] - Time cost: 0.464s | fit & process data Done
+[29596:MainThread](2026-10-26 15:04:49,713) INFO - qlib.timer - [log.py:127] - Time cost: 23.694s | Init data Done
+[29596:MainThread](2026-10-26 15:04:50,209) INFO - qlib.Qniverse - [model_backbone_phitp.py:81] - Qniverse Model...
+[29596:MainThread](2026-10-26 15:04:50,211) INFO - qlib.Qniverse - [model_backbone_phitp.py:110] - # model params: 5457
+[29596:MainThread](2026-10-26 15:04:50,213) WARNING - qlib.Qniverse - [model_backbone_phitp.py:131] - logdir C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\verification_output\synthetic\selection\LSTM\predicates\phi_momentum\alpha4.0\tsil_seed42_a264ffaa0c06 is not empty
+[29596:MainThread](2026-10-26 15:04:50,437) INFO - qlib.Qniverse - [model_backbone_phitp.py:444] - Epoch 0:
+[29596:MainThread](2026-10-26 15:04:50,438) INFO - qlib.Qniverse - [model_backbone_phitp.py:446] - training...
+[29596:MainThread](2026-10-26 15:04:50,628) INFO - qlib.Qniverse - [model_backbone_phitp.py:449] - evaluating...
+[29596:MainThread](2026-10-26 15:04:50,757) INFO - qlib.Qniverse - [model_backbone_phitp.py:457] - 	valid metrics: {'MSE': 0.06478187, 'MAE': 0.24657314, 'IC': 0.017520777519675502, 'Rank_IC': -0.002992329308118784, 'sample_count': 504, 'prediction_count': 504, 'ICIR': 0.1399393275463234, 'RankICIR': -0.02920164400855694, 'RankIC': -0.002992329308118784, 'InfT_ms_per_sample': 0.06868690475346825, 'InfT': 0.06868690475346825}
+[29596:MainThread](2026-10-26 15:04:50,758) INFO - qlib.Qniverse - [model_backbone_phitp.py:465] - 	valid ic increased: inf
+[29596:MainThread](2026-10-26 15:04:50,763) INFO - qlib.Qniverse - [model_backbone_phitp.py:521] - best score: 0.017521 @ 0
+[29596:MainThread](2026-10-26 15:04:50,765) INFO - qlib.Qniverse - [model_backbone_phitp.py:529] - test metrics: {'best_epoch': 0, 'best_score': 0.017520777519675502}
+[29596:MainThread](2026-10-26 15:04:50,766) INFO - qlib.Qniverse - [model_backbone_phitp.py:532] - save model & pred to local directory
+[29596:MainThread](2026-10-26 15:04:50,850) INFO - qlib.Initialization - [config.py:420] - default_conf: client.
+[29596:MainThread](2026-10-26 15:04:50,857) INFO - qlib.Initialization - [__init__.py:74] - qlib successfully initialized based on client settings.
+[29596:MainThread](2026-10-26 15:04:50,859) INFO - qlib.Initialization - [__init__.py:76] - data_path={'__DEFAULT_FREQ': WindowsPath('C:/Users/֣����/Documents/TSIL����/TSIL_paper_aligned_20261025/verification_output/synthetic/market')}
+[29596:MainThread](2026-10-26 15:05:14,415) INFO - qlib.timer - [log.py:127] - Time cost: 23.553s | Loading data Done
+[29596:MainThread](2026-10-26 15:05:14,829) INFO - qlib.timer - [log.py:127] - Time cost: 0.407s | CSZScoreNorm Done
+[29596:MainThread](2026-10-26 15:05:14,838) INFO - qlib.timer - [log.py:127] - Time cost: 0.010s | Fillna Done
+[29596:MainThread](2026-10-26 15:05:14,853) INFO - qlib.timer - [log.py:127] - Time cost: 0.014s | DropnaLabel Done
+[29596:MainThread](2026-10-26 15:05:14,855) INFO - qlib.timer - [log.py:127] - Time cost: 0.438s | fit & process data Done
+[29596:MainThread](2026-10-26 15:05:14,857) INFO - qlib.timer - [log.py:127] - Time cost: 23.993s | Init data Done
+[29596:MainThread](2026-10-26 15:05:15,323) INFO - qlib.Qniverse - [model_backbone_phitp.py:81] - Qniverse Model...
+[29596:MainThread](2026-10-26 15:05:15,327) INFO - qlib.Qniverse - [model_backbone_phitp.py:110] - # model params: 5457
+[29596:MainThread](2026-10-26 15:05:15,329) WARNING - qlib.Qniverse - [model_backbone_phitp.py:131] - logdir C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\verification_output\synthetic\selection\LSTM\predicates\phi_momentum\alpha4.0\tsil_seed42_a264ffaa0c06\test_evaluation is not empty
+[29596:MainThread](2026-10-26 15:05:15,590) INFO - qlib.backtest caller - [__init__.py:93] - Create new exchange
+[29596:MainThread](2026-10-26 15:05:16,771) WARNING - qlib.data - [data.py:665] - load calendar error: freq=day, future=True; return current calendar!
+[29596:MainThread](2026-10-26 15:05:16,774) WARNING - qlib.data - [data.py:668] - You can get future calendar by referring to the following document: https://github.com/microsoft/qlib/blob/main/scripts/data_collector/contrib/README.md
+[29596:MainThread](2026-10-26 15:05:16,777) WARNING - qlib.BaseExecutor - [executor.py:121] - `common_infra` is not set for <qlib.backtest.executor.SimulatorExecutor object at 0x000001978D0B7920>
+
+backtest loop:   0%|          | 0/10 [00:00<?, ?it/s]C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\qlib\utils\index_data.py:492: RuntimeWarning: Mean of empty slice
+  return np.nanmean(self.data)
+
+backtest loop:  20%|����        | 2/10 [00:00<00:00, 16.39it/s]
+backtest loop:  60%|������������    | 6/10 [00:00<00:00, 26.45it/s]
+backtest loop:  90%|������������������ | 9/10 [00:00<00:00, 25.01it/s]
+backtest loop: 100%|��������������������| 10/10 [00:00<00:00, 24.31it/s]
+TSIL test evaluation
+Inference forward pipeline: 0.096415 ms/sample
+Best validation epoch: 0
+Best validation daily IC: 0.017520777519675502
+sample_count: 504
+MSE: 0.06491724401712418
+MAE: 0.24677008390426636
+IC: 0.010131481000888664
+ICIR: 0.1060486544871984
+RankIC: 0.022260195944406473
+RankICIR: 0.2921722309338669
+Portfolio: arithmetic AR=252*mean(r); IR=sqrt(252)*mean(r)/std(r,ddof=1)
+Signals formed at t are executed by Qlib at the next trading step.
+strategy_without_cost: annualized_return=0.054825, information_ratio=3.494570, max_drawdown=-0.001506
+strategy_with_cost: annualized_return=0.020492, information_ratio=1.269224, max_drawdown=-0.001717
+excess_without_cost: annualized_return=-0.566324, information_ratio=-5.142983, max_drawdown=-0.025203
+excess_with_cost: annualized_return=-0.600658, information_ratio=-5.447975, max_drawdown=-0.026202
+
+{
+  "synthetic_only": true,
+  "modes": [
+    {
+      "mode": "original",
+      "samples": 504,
+      "best_valid_ic": 0.0175117713096016,
+      "test_ic": 0.010169221190602802,
+      "trade_days": 10,
+      "cost_total": 0.0013624271241128982,
+      "lot_rounding_verified": true,
+      "portfolio": {
+        "strategy_without_cost.mean": 0.00021755960539875135,
+        "strategy_without_cost.std": 0.0009882908974960475,
+        "strategy_without_cost.annualized_return": 0.05482502056048534,
+        "strategy_without_cost.information_ratio": 3.4945699450039314,
+        "strategy_without_cost.max_drawdown": -0.0015055154059610662,
+        "strategy_with_cost.mean": 8.131689298746156e-05,
+        "strategy_with_cost.std": 0.0010170508247646295,
+        "strategy_with_cost.annualized_return": 0.020491857032840313,
+        "strategy_with_cost.information_ratio": 1.2692243356652217,
+        "strategy_with_cost.max_drawdown": -0.0017171142275765985,
+        "excess_without_cost.mean": -0.002247318953713798,
+        "excess_without_cost.std": 0.006936651838342139,
+        "excess_without_cost.annualized_return": -0.5663243763358771,
+        "excess_without_cost.information_ratio": -5.142982989548147,
+        "excess_without_cost.max_drawdown": -0.025203236988946144,
+        "excess_with_cost.mean": -0.002383561666125087,
+        "excess_with_cost.std": 0.006945308722802662,
+        "excess_with_cost.annualized_return": -0.600657539863522,
+        "excess_with_cost.information_ratio": -5.447975018690554,
+        "excess_with_cost.max_drawdown": -0.026201812889060743
+      }
+    },
+    {
+      "mode": "feature",
+      "samples": 504,
+      "best_valid_ic": 0.006768496286543208,
+      "test_ic": 0.0027790458853308667,
+      "trade_days": 10,
+      "cost_total": 0.001687688710745596,
+      "lot_rounding_verified": true,
+      "portfolio": {
+        "strategy_without_cost.mean": 0.0005420224246098075,
+        "strategy_without_cost.std": 0.0012043355496086984,
+        "strategy_without_cost.annualized_return": 0.13658965100167147,
+        "strategy_without_cost.information_ratio": 7.144470032477644,
+        "strategy_without_cost.max_drawdown": -0.0010480305796829858,
+        "strategy_with_cost.mean": 0.00037325355353524795,
+        "strategy_with_cost.std": 0.0012351743528821399,
+        "strategy_with_cost.annualized_return": 0.09405989549088248,
+        "strategy_with_cost.information_ratio": 4.797068897946734,
+        "strategy_with_cost.max_drawdown": -0.0013352125729968272,
+        "excess_without_cost.mean": -0.001922856134502741,
+        "excess_without_cost.std": 0.006943398404485255,
+        "excess_without_cost.annualized_return": -0.48455974589469075,
+        "excess_without_cost.information_ratio": -4.396175050732699,
+        "excess_without_cost.max_drawdown": -0.02287901604304166,
+        "excess_with_cost.mean": -0.0020916250055773014,
+        "excess_with_cost.std": 0.006937561771718388,
+        "excess_with_cost.annualized_return": -0.5270895014054799,
+        "excess_with_cost.information_ratio": -4.786050012545759,
+        "excess_with_cost.max_drawdown": -0.023993187024568072
+      }
+    },
+    {
+      "mode": "tsil",
+      "samples": 504,
+      "best_valid_ic": 0.01753005083596906,
+      "test_ic": 0.010208976104462322,
+      "trade_days": 10,
+      "cost_total": 0.0013624271241128982,
+      "lot_rounding_verified": true,
+      "portfolio": {
+        "strategy_without_cost.mean": 0.00021755960539875135,
+        "strategy_without_cost.std": 0.0009882908974960475,
+        "strategy_without_cost.annualized_return": 0.05482502056048534,
+        "strategy_without_cost.information_ratio": 3.4945699450039314,
+        "strategy_without_cost.max_drawdown": -0.0015055154059610662,
+        "strategy_with_cost.mean": 8.131689298746156e-05,
+        "strategy_with_cost.std": 0.0010170508247646295,
+        "strategy_with_cost.annualized_return": 0.020491857032840313,
+        "strategy_with_cost.information_ratio": 1.2692243356652217,
+        "strategy_with_cost.max_drawdown": -0.0017171142275765985,
+        "excess_without_cost.mean": -0.002247318953713798,
+        "excess_without_cost.std": 0.006936651838342139,
+        "excess_without_cost.annualized_return": -0.5663243763358771,
+        "excess_without_cost.information_ratio": -5.142982989548147,
+        "excess_without_cost.max_drawdown": -0.025203236988946144,
+        "excess_with_cost.mean": -0.002383561666125087,
+        "excess_with_cost.std": 0.006945308722802662,
+        "excess_with_cost.annualized_return": -0.600657539863522,
+        "excess_with_cost.information_ratio": -5.447975018690554,
+        "excess_with_cost.max_drawdown": -0.026201812889060743
+      }
+    }
+  ],
+  "equal_sample_indices": true,
+  "selected_alpha": 4.0,
+  "selection_test_evaluated": false,
+  "raw_label_verified": true,
+  "slippage_prices_verified": true,
+  "suspension_and_threshold_filters_verified": true,
+  "checkpoint_cli_verified": true
+}

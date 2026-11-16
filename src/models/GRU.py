@@ -12,9 +12,6 @@ class GRU(nn.Module):
         self.hidden_size = configs.d_model
         self.num_layers = configs.e_layers
         self.dropout = configs.dropout
-        self.alpha = torch.nn.Parameter(
-            torch.tensor(float(configs.tau_hat_init), dtype=torch.float32)
-        )
         self.input_drop = nn.Dropout(self.dropout)
         self.rnn = nn.GRU(
             input_size=self.input_size,

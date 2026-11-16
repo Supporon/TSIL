@@ -12,3 +12,6 @@ plotly==5.24.1
 ruamel.yaml==0.18.14
 tqdm==4.66.5
 optuna==4.9.0
+einops==0.8.2
+# Qlib 0.9.6 ParallelExt relies on Joblib's pre-1.5 backend API.
+joblib==1.4.2

@@ -1,0 +1,54 @@
+........................................................................ [ 76%]
+......................                                                   [100%]
+============================== warnings summary ===============================
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\matplotlib\_fontconfig_pattern.py:64: PyparsingDeprecationWarning: 'oneOf' deprecated - use 'one_of'
+    prop = Group((name + Suppress("=") + comma_separated(value)) | oneOf(_CONSTANTS))
+
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\matplotlib\_fontconfig_pattern.py:85: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+    parse = parser.parseString(pattern)
+
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\matplotlib\_fontconfig_pattern.py:89: PyparsingDeprecationWarning: 'resetCache' deprecated - use 'reset_cache'
+    parser.resetCache()
+
+tests/test_final_evaluation.py::test_predict_uses_only_requested_segment
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\matplotlib\_mathtext.py:45: PyparsingDeprecationWarning: 'enablePackrat' deprecated - use 'enable_packrat'
+    ParserElement.enablePackrat()
+
+tests/test_selection.py::test_search_can_construct_every_target_backbone_from_cli_template[lstm]
+tests/test_selection.py::test_search_can_construct_every_target_backbone_from_cli_template[gru]
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\torch\nn\modules\rnn.py:83: UserWarning: dropout option adds dropout after all but last recurrent layer, so non-zero dropout expects num_layers greater than 1, but got dropout=0.1 and num_layers=1
+    warnings.warn("dropout option adds dropout after all but last "
+
+tests/test_selection.py::test_search_can_construct_every_target_backbone_from_cli_template[lstm]
+tests/test_selection.py::test_search_can_construct_every_target_backbone_from_cli_template[gru]
+tests/test_training_alignment.py::test_backbone_has_no_loss_parameter_and_can_train_one_step[TCN]
+tests/test_training_alignment.py::test_feature_concatenation_uses_same_raw_descriptor_at_each_time_step[TCN]
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\torch\nn\utils\weight_norm.py:28: UserWarning: torch.nn.utils.weight_norm is deprecated in favor of torch.nn.utils.parametrizations.weight_norm.
+    warnings.warn("torch.nn.utils.weight_norm is deprecated in favor of torch.nn.utils.parametrizations.weight_norm.")
+
+tests/test_selection.py::test_search_can_construct_every_target_backbone_from_cli_template[lstm]
+tests/test_selection.py::test_search_can_construct_every_target_backbone_from_cli_template[gru]
+tests/test_training_alignment.py::test_backbone_has_no_loss_parameter_and_can_train_one_step[Transformer]
+tests/test_training_alignment.py::test_feature_concatenation_uses_same_raw_descriptor_at_each_time_step[Transformer]
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\.venv\Lib\site-packages\torch\nn\modules\transformer.py:306: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.self_attn.batch_first was not True(use batch_first for better inference performance)
+    warnings.warn(f"enable_nested_tensor is True, but self.use_nested_tensor is False because {why_not_sparsity_fast_path}")
+
+tests/test_training_alignment.py::test_training_search_path_keeps_tail_and_does_not_access_test
+  C:\Users\֣����\Documents\TSIL����\TSIL_paper_aligned_20261025\src\model_backbone_phitp.py:131: DeprecationWarning: The 'warn' method is deprecated, use 'warning' instead
+    self.logger.warn(f"logdir {self.logdir} is not empty")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+94 passed, 25 warnings in 11.42s

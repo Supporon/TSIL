@@ -4,13 +4,16 @@ Centralizes the defaults and the config-mutation logic that both the single-run
 entry point and the hyper-parameter search entry point need, so the two stay in
 sync:
 
-- DEFAULT_SEEDS / DEFAULT_SEARCH_SPACE / TAU_VALUES: the canonical sweep values.
+- DEFAULT_SEEDS / DEFAULT_SEARCH_SPACE / PENALTY_ALPHA_VALUES: the canonical sweep values.
 - apply_overrides():   map command-line flags onto a loaded YAML config.
 - inject_model_specific_params(): fill in per-backbone architecture knobs.
 - set_market():        retarget a config at a different A-share universe.
 - build_report():      format the backtest report string.
 """
-from typing import Optional
+import copy
+import hashlib
+import json
+from pathlib import Path
 
 # Benchmarks per universe (used when --market retargets a config).
 MARKET_BENCHMARKS = {
@@ -30,13 +33,45 @@ DEFAULT_SEARCH_SPACE = {
     "bs":      {"type": "categorical", "choices": [256, 512, 1024]},
 }
 
-# tau_hat_init grid (learnable I-vs-P blend init); swept alongside the space above.
-TAU_VALUES = [-4.0, -2.0, 0.0, 2.0, 4.0]
+# Fixed alpha grid from the paper; beta=sigmoid(alpha), never optimised by Adam.
+PENALTY_ALPHA_VALUES = [-4.0, -2.0, 0.0, 2.0, 4.0]
 
 # Backbone families.
-DOMAIN_AGNOSTIC_MODELS = ["LSTM", "GRU", "TCN", "Transformer", "GAT", "GCN", "PatchTST"]
+DOMAIN_AGNOSTIC_MODELS = ["LSTM", "GRU", "TCN", "Transformer", "GAT"]
 STOCK_SPECIALIZED_MODELS = ["LSR_IGRU", "MASTER", "MERA", "StockMixer"]
 ALL_MODELS = DOMAIN_AGNOSTIC_MODELS + STOCK_SPECIALIZED_MODELS
+RELATIONAL_MODELS = {"GAT", "MASTER", "LSR_IGRU", "LSRIGRU"}
+
+
+def configure_dataset(config):
+    """Pass the same predicate/injection contract to model and data pipeline."""
+    mc = config["model_config"]
+    kwargs = config["task"]["dataset"]["kwargs"]
+    kwargs["phi_type"] = mc.get("phi_type", "mse")
+    kwargs["predicate_config"] = mc.get("predicate_config", {})
+    kwargs["injection_mode"] = mc.get("injection_mode", "original" if kwargs["phi_type"] == "mse" else "tsil")
+    kwargs["cross_sectional"] = config["task"]["model"]["kwargs"]["model_type"] in RELATIONAL_MODELS
+    kwargs.setdefault("days_per_batch", 2)
+    return config
+
+
+def configure_run(config, seed):
+    """Copy a run, set its actual seed and keep outputs of distinct runs apart."""
+    config = copy.deepcopy(config)
+    mc = config["model_config"]
+    mode = mc.get("injection_mode", "original" if mc.get("phi_type", "mse") == "mse" else "tsil")
+    identity = {"model": mc, "trainer": {k: v for k, v in config["task"]["model"]["kwargs"].items()
+                if k not in {"logdir", "model_config", "seed"}}, "seed": int(seed),
+                "market": config.get("market"), "batch_size": config["task"]["dataset"]["kwargs"]["batch_size"],
+                "days_per_batch": config["task"]["dataset"]["kwargs"].get("days_per_batch", 2)}
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    config["logdir"] = str(Path(config["logdir"]) / f"{mode}_seed{seed}_{digest}")
+    model_kwargs = config["task"]["model"]["kwargs"]
+    model_kwargs["logdir"] = config["logdir"]
+    model_kwargs["seed"] = int(seed)
+    model_kwargs["model_config"] = mc
+    configure_dataset(config)
+    return config
 
 
 def set_market(config: dict, market: str) -> dict:
@@ -95,8 +130,10 @@ def apply_overrides(config: dict, args) -> dict:
 
     if getattr(args, "phi_type", None) is not None:
         mc["phi_type"] = args.phi_type
-    if getattr(args, "tau_hat_init", None) is not None:
-        mc["tau_hat_init"] = args.tau_hat_init
+    if getattr(args, "penalty_alpha", None) is not None:
+        mc["penalty_alpha"] = args.penalty_alpha
+    if getattr(args, "injection_mode", None) is not None:
+        mc["injection_mode"] = args.injection_mode
     if getattr(args, "d_model", None) is not None:
         mc["d_model"] = args.d_model
     if getattr(args, "e_layers", None) is not None:
@@ -117,33 +154,35 @@ def apply_overrides(config: dict, args) -> dict:
     return config
 
 
-def build_report(metrics: dict, analysis_dict: dict) -> str:
-    """Format the backtest report string from ranking + portfolio metrics."""
-    def g(k):
-        return analysis_dict.get(k, float("nan"))
+def portfolio_analysis(daily):
+    """Executed strategy and benchmark-relative returns, with explicit units.
 
-    return f"""
-        **********************************
-                Backtest Report
-        **********************************
-             InfT:       {metrics['InfT']:.6f}
-        Best epoch:      {metrics['best_epoch']}
-        Best score:      {metrics['best_score']:.4f}
-              MSE:       {metrics['MSE']:.4f}
-              MAE:       {metrics['MAE']:.4f}
-               IC:       {metrics['IC']:.4f}
-             ICIR:       {metrics['ICIR']:.4f}
-           RankIC:       {metrics['RankIC']:.4f}
-         RankICIR:       {metrics['RankICIR']:.4f}
-        w/o cost AR:    {g('1day.excess_return_without_cost.annualized_return'):.4f}
-        w/o cost ret mean:    {g('1day.excess_return_without_cost.mean'):.4f}
-        w/o cost ret std:    {g('1day.excess_return_without_cost.std'):.4f}
-        w/o cost IR:    {g('1day.excess_return_without_cost.information_ratio'):.4f}
-        w/o cost MMD:    {g('1day.excess_return_without_cost.max_drawdown'):.4f}
-        with cost AR:    {g('1day.excess_return_with_cost.annualized_return'):.4f}
-        with cost ret mean:    {g('1day.excess_return_with_cost.mean'):.4f}
-        with cost ret std:    {g('1day.excess_return_with_cost.std'):.4f}
-        with cost IR:    {g('1day.excess_return_with_cost.information_ratio'):.4f}
-        with cost MMD:    {g('1day.excess_return_with_cost.max_drawdown'):.4f}
-        ***************************************
-        """
+    The manuscript does not fix the annualization/compounding convention. Use
+    252 trading days, arithmetic annualization and additive drawdown, and retain
+    the daily series so geometric/CAGR summaries can be recomputed separately.
+    """
+    from qlib.contrib.evaluate import risk_analysis
+    gross = daily["return"]
+    series = {"strategy_without_cost": gross,
+              "strategy_with_cost": gross - daily["cost"],
+              "excess_without_cost": gross - daily["bench"],
+              "excess_with_cost": gross - daily["cost"] - daily["bench"]}
+    return {f"{group}.{key}": float(value) for group, returns in series.items()
+            for key, value in risk_analysis(returns, N=252, freq=None)["risk"].items()}
+
+
+def build_report(metrics: dict, analysis_dict: dict) -> str:
+    """Keep prediction, strategy return and excess return meanings explicit."""
+    lines = ["TSIL test evaluation", "Inference forward pipeline: %.6f ms/sample" %
+             metrics.get("InfT_ms_per_sample", float("nan")),
+             f"Best validation epoch: {metrics.get('best_epoch')}",
+             f"Best validation daily IC: {metrics.get('best_score')}"]
+    for key in ("sample_count", "MSE", "MAE", "IC", "ICIR", "RankIC", "RankICIR"):
+        lines.append(f"{key}: {metrics.get(key, float('nan'))}")
+    lines.append("Portfolio: arithmetic AR=252*mean(r); IR=sqrt(252)*mean(r)/std(r,ddof=1)")
+    lines.append("Signals formed at t are executed by Qlib at the next trading step.")
+    for group in ("strategy_without_cost", "strategy_with_cost", "excess_without_cost", "excess_with_cost"):
+        values = [f"{key}={analysis_dict.get(group + '.' + key, float('nan')):.6f}"
+                  for key in ("annualized_return", "information_ratio", "max_drawdown")]
+        lines.append(group + ": " + ", ".join(values))
+    return "\n".join(lines) + "\n"

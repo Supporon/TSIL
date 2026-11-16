@@ -209,11 +209,6 @@ class LSR_IGRU(nn.Module):
         self.dropout = configs.dropout
         self.seq_len = configs.seq_len
         
-        # Learnable parameter for the weighted loss (used when phi_type != 'mse';
-        # tau_hat = sigmoid(alpha) blends the I and P terms).
-        self.alpha = torch.nn.Parameter(
-            torch.tensor(float(configs.tau_hat_init), dtype=torch.float32)
-        )
         
         # Input processing
         self.input_drop = nn.Dropout(self.dropout)

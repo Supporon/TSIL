@@ -47,7 +47,6 @@ class Transformer(nn.Module):
         self.num_layers = configs.e_layers
         self.noise_level = configs.noise_level
         self.dropout = configs.dropout
-        self.alpha = torch.nn.Parameter(torch.tensor(configs.tau_hat_init, dtype=torch.float))
         self.input_drop = nn.Dropout(self.dropout)
 
         self.input_proj = nn.Linear(self.input_size, self.hidden_size)
@@ -57,7 +56,6 @@ class Transformer(nn.Module):
             nhead=configs.n_heads, dropout=self.dropout, d_model=self.hidden_size, dim_feedforward=self.d_ff
         )
         self.encoder = nn.TransformerEncoder(layer, num_layers=self.num_layers)
-        self.alpha = torch.nn.Parameter(torch.tensor(configs.tau_hat_init))  # learnable tau_hat parameter
 
         self.projection = nn.Sequential(
                 nn.Linear(self.hidden_size, self.d_ff, bias=True),

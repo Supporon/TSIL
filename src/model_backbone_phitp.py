@@ -1,34 +1,21 @@
-"""
-model_backbone_phitp.py
-=======================
+"""Nine released backbones with paper-faithful, training-only TSIL penalties.
 
-TSIL backbone driven by a single ``phi_type`` switch (there is no ``loss_type``
-field). ``_select_criterion`` supports the two loss modes:
-
-    phi_type = 'mse'   -> plain MSE (no statistical-invariant weighting)
-    phi_type = 'ones'  -> weighted MSE with the all-ones control predicate Phi_ones
-    phi_type = <TP>    -> weighted MSE with one of the six temporal predicates
-                          (phi_timestamp / phi_cycle / phi_phase /
-                           phi_momentum / phi_volatility / phi_return_dist),
-                          defined in ``src/temporal_predicates.py``.
-
-The same six predicates also have an alternate implementation in
-``src/custom_phi_constructors.py``, served as a fallback when their key is supplied.
-
-This is the single QniverseModel backbone used by ``train.py`` / ``search.py``.
+Original uses MSE; TSIL adds fixed-weight residual moments; Feature concatenates
+the same raw descriptors at every input time step. Validation is daily IC.
 """
 
 import os
 import copy
 import json
 import collections
+import math
+import random
 import numpy as np
 import pandas as pd
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 
 import time
 
@@ -38,11 +25,6 @@ from qlib.model.base import Model
 from types import SimpleNamespace
 import matplotlib.pyplot as plt
 
-# vis
-import plotly
-from qlib.contrib.report.analysis_model.analysis_model_performance import model_performance_graph
-
-from src.models.PatchTST import PatchTST
 # The following backbones are not part of the released experiments and their
 # source files are omitted from this release. Re-enable the import after adding
 # the corresponding file under src/models/ if you need them.
@@ -58,100 +40,16 @@ from src.models.Transformer import Transformer
 # from src.models.Mamba import mamba
 from src.models.TCN import TCN
 from src.models.GAT import GAT
-from src.models.GCN import GCN
 from src.models.LSR_IGRU import LSR_IGRU, LSRIGRU
 from src.models.StockMixer import StockMixer
 from src.models.master import MASTER
 from src.models.MERA import MERA
 
-# The six paper Temporal Predicates (timestamp / cycle / phase / momentum /
-# volatility / return-distribution) live in their own module.
-from src.temporal_predicates import get_temporal_I_P, TEMPORAL_PHI_TYPES
-
-# Alternate implementation of the paper's predicates in src/custom_phi_constructors.py.
-# Optional: if the module is present, these keys can also be served from it. The
-# whitelist below contains only the six temporal predicates; the Phi_ones control
-# is handled by WeightedMSELoss.get_ones_I_P.
-try:
-    from src.custom_phi_constructors import get_custom_I_P
-    _CUSTOM_PHI_TYPES = {
-        'phi_timestamp', 'phi_cycle', 'phi_phase',
-        'phi_momentum', 'phi_volatility', 'phi_return_dist',
-    }
-    _CUSTOM_PHI_AVAILABLE = True
-except ImportError:
-    _CUSTOM_PHI_AVAILABLE = False
-    _CUSTOM_PHI_TYPES = set()
+from src.temporal_predicates import selected_predicates, descriptor_dimensions
+from src.tsil_loss import StatisticalInvariantLoss
+from src.run_utils import RELATIONAL_MODELS
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
-
-class WeightedMSELoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def get_ones_I_P(self, batch_size, device):
-        """Phi_ones control predicate: build the I and P matrices with phi = 1."""
-        I = torch.eye(batch_size, device=device)  # identity matrix (batch_size x batch_size)
-        phi = torch.ones((batch_size, 1), device=device)
-        phi = phi / torch.linalg.norm(phi)  # unit-norm normalization
-        P = torch.mm(phi, phi.T)
-        return I, P
-
-    def forward(self, phi_type, batch_x, timestamp_x, outputs, targets, tau_hat=None, tau=None):
-        batch_size = outputs.shape[0]
-        device = outputs.device
-        if phi_type in TEMPORAL_PHI_TYPES:
-            # One of the paper's six temporal predicates
-            # (timestamp / cycle / phase / momentum / volatility / return-distribution).
-            I, P = get_temporal_I_P(phi_type, batch_x, timestamp_x=timestamp_x, device=device)
-        elif _CUSTOM_PHI_AVAILABLE and phi_type in _CUSTOM_PHI_TYPES:
-            # Same predicates served from src/custom_phi_constructors.py.
-            I, P = get_custom_I_P(phi_type, batch_x, device=device)
-        else:
-            # 'ones' control predicate Φ_ones (also the fallback for any unknown key).
-            I, P = self.get_ones_I_P(batch_size, device)
-        # LUSI loss is the QUADRATIC form (Vapnik & Izmailov 2020, eq. 79):
-        #   R = (out - tgt)^T (tau_hat * V + tau * P) (out - tgt),  here V = I.
-        # It must be built on the RAW residual e = (out - tgt), NOT on e**2.
-        # The P term  tau * e^T P e = tau * ||Phi^T e||^2  is the statistical
-        # invariant; it contains the cross products e_i * e_j. Squaring e first
-        # With the form below
-        # V_loss + P_loss == total exactly (M is linear in the e^T M e form).
-        resid = (outputs - targets).reshape(-1, 1)  # e, column vector [bs, 1]
-        if tau_hat is not None:
-            M = tau_hat * I + tau * P                        # τ̂V + τP, here V=I
-            Me = torch.matmul(M, resid)                      # (τ̂I+τP) e
-            total = torch.mean(resid * Me)                   # (1/n) eᵀ M e
-            return {
-                'total': total,
-                'ori_mse': torch.mean(resid.pow(2)),
-                'V_loss': torch.mean(resid * torch.matmul(tau_hat * I, resid)),  # τ̂ eᵀI e
-                'P_loss': torch.mean(resid * torch.matmul(tau * P, resid)),      # τ eᵀP e
-            }
-        else:
-            assert tau_hat is None, "loss type error..."
-
-class RankMSELoss(nn.Module):
-    def __init__(self, rank_weight=3.0, mse_weight=1.0):
-        super(RankMSELoss, self).__init__()
-        self.rank_weight = rank_weight
-        self.mse_weight = mse_weight
-
-    def forward(self, pred, label):
-        mse_loss = (pred - label).pow(2).mean()
-        # rank predictions vs. ground truth
-        pred_diff = pred.unsqueeze(1) - pred.unsqueeze(0) # pairwise differences
-        label_diff = label.unsqueeze(1) - label.unsqueeze(0)
-    
-        rank_loss = F.relu(- (pred_diff * label_diff)) # same sign => correct order => no penalty
-        
-        rank_loss = rank_loss.sum(dim=[1])
-        rank_loss = rank_loss.mean()
-
-        combined_loss = self.rank_weight * rank_loss + self.mse_weight * mse_loss
-        
-        return combined_loss
-    
 
 class QniverseModel(Model):
     def __init__(
@@ -160,8 +58,8 @@ class QniverseModel(Model):
             model_type="WFTNet",
             lr=1e-3,
             n_epochs=500,
-            early_stop=50,
-            smooth_steps=5,
+            early_stop=20,
+            smooth_steps=1,
             max_steps_per_epoch=None,
             freeze_model=False,
             model_init_state=None,
@@ -169,12 +67,13 @@ class QniverseModel(Model):
             logdir=None,
             eval_train=True,
             eval_test=False,
-            avg_params=True,
+            avg_params=False,
             plot_training=True,  # whether to plot the training curves
             plot_show=False,
             **kwargs,
     ):
 
+        random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
 
@@ -182,7 +81,26 @@ class QniverseModel(Model):
         self.logger.info("Qniverse Model...")
 
         self.model_type = model_type
-        self.model = eval(model_type)(SimpleNamespace(**model_config)).to(device)
+        self.model_config = copy.deepcopy(model_config)
+        self.phi_type = model_config.get("phi_type", "mse")
+        self.predicates = selected_predicates(self.phi_type)
+        self.injection_mode = model_config.get("injection_mode", "tsil" if self.predicates else "original")
+        if self.injection_mode not in {"original", "tsil", "feature"}:
+            raise ValueError("injection_mode must be original, tsil, or feature")
+        if self.injection_mode == "feature" and not self.predicates:
+            raise ValueError("feature injection requires at least one predicate")
+        alpha = model_config.get("penalty_alpha", 0.0)
+        alphas = alpha if isinstance(alpha, dict) else {name: alpha for name in self.predicates}
+        if any(not math.isfinite(float(alphas[name])) for name in self.predicates):
+            raise ValueError("penalty_alpha must be finite and fixed within a run")
+        self.betas = {name: torch.sigmoid(torch.tensor(float(alphas[name]), dtype=torch.float64)).item()
+                      for name in self.predicates}
+        self.use_weighted = self.injection_mode == "tsil" and bool(self.predicates)
+        backbone_config = copy.deepcopy(model_config)
+        if self.injection_mode == "feature":
+            dims = descriptor_dimensions(model_config["seq_len"], model_config.get("predicate_config"))
+            backbone_config["enc_in"] += sum(dims[name] for name in self.predicates)
+        self.model = eval(model_type)(SimpleNamespace(**backbone_config)).to(device)
         if model_init_state:
             self.model.load_state_dict(torch.load(model_init_state, map_location="cpu")["model"])
         if freeze_model:
@@ -193,7 +111,6 @@ class QniverseModel(Model):
 
         self.optimizer = optim.Adam(list(self.model.parameters()), lr=lr)
 
-        self.model_config = model_config
         self.lr = lr
         self.n_epochs = n_epochs
         self.early_stop = early_stop
@@ -204,12 +121,6 @@ class QniverseModel(Model):
         self.eval_train = eval_train
         self.eval_test = eval_test
         self.avg_params = avg_params
-        # loss_type is removed: the loss mode is driven solely by phi_type.
-        #   phi_type == 'mse'  -> plain MSE
-        #   phi_type != 'mse'  -> weighted MSE with P built from the predicate
-        #                         ('ones' = Φ_ones control, or a temporal predicate key)
-        self.phi_type = model_config.get('phi_type', 'mse')
-        self.use_weighted = (self.phi_type != 'mse')
         self.plot_training = plot_training  # plotting flag
         self.plot_show = plot_show
 
@@ -223,17 +134,27 @@ class QniverseModel(Model):
         self.global_step = -1
 
     def _select_criterion(self):
-        """Pick the loss based solely on phi_type.
+        return StatisticalInvariantLoss(self.betas) if self.use_weighted else nn.MSELoss()
 
-        phi_type == 'mse' -> plain MSE (RankMSELoss with the ranking term disabled).
-        otherwise         -> WeightedMSELoss; the predicate (phi_type) decides P:
-                             'ones' = Φ_ones control, or one of the temporal predicates.
-        """
-        if self.phi_type == 'mse':
-            criterion = RankMSELoss(rank_weight=0.0, mse_weight=1.0)
-        else:
-            criterion = WeightedMSELoss()
-        return criterion
+    def _forward_batch(self, batch):
+        feature = batch["data"].to(device)[:, :, :-1]
+        feature = torch.nan_to_num(feature, nan=0.0, posinf=0.0, neginf=0.0)
+        if self.injection_mode == "feature":
+            descriptors = batch.get("predicates", {})
+            if set(descriptors) != set(self.predicates):
+                raise ValueError("batch descriptors do not match the selected feature predicates")
+            extra = torch.cat([descriptors[name].to(feature) for name in self.predicates], dim=1)
+            feature = torch.cat([feature, extra[:, None, :].expand(-1, feature.shape[1], -1)], dim=2)
+        if self.model_type not in RELATIONAL_MODELS:
+            return self.model(feature).reshape(-1)
+        # Relationship models see a complete cross-section from ONE date only.
+        # The loss may subsequently join multiple dates into a stock-time batch.
+        dates = batch["date"].to(device)
+        result = feature.new_empty(feature.shape[0])
+        for date in torch.unique(dates):
+            mask = dates == date
+            result[mask] = self.model(feature[mask]).reshape(-1)
+        return result
 
 
     def plot_training_curves(self, train_logs, valid_logs, best_epoch, show=False):
@@ -298,7 +219,7 @@ class QniverseModel(Model):
         if show==True:
             plt.show()
         plt.tight_layout()
-        fig_name = 'training_curves_tau_'+str(self.model_config['ind'])+'.png'
+        fig_name = 'training_curves_tau_'+str(self.model_config.get('ind', 0))+'.png'
         plt.savefig(os.path.join(self.logdir, fig_name), dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -314,7 +235,7 @@ class QniverseModel(Model):
             'valid_mse': valid_logs['MSE'],
             'valid_mae': valid_logs['MAE']
         })
-        csv_file_name = 'training_data_tau_'+str(self.model_config['tau_hat_init'])+'.csv'
+        csv_file_name = 'training_data_tau_'+str(self.model_config.get('penalty_alpha', 0.0))+'.csv'
         training_data.to_csv(os.path.join(self.logdir, csv_file_name), index=False)
 
 
@@ -366,11 +287,11 @@ class QniverseModel(Model):
         ax2_right.legend(loc='upper right')
 
         # Correlation
-        ax3.plot(epochs, train_logs['Tau_P'], 'r-', label='Tau_P')
+        ax3.plot(epochs, train_logs['Beta'], 'r-', label='Beta')
         ax3.axvline(best_epoch+1, linestyle='--', linewidth=2)
-        ax3.set_title('Tau_P')
+        ax3.set_title('Beta')
         ax3.set_xlabel('Epochs')
-        ax3.set_ylabel('Tau_P')
+        ax3.set_ylabel('Beta')
         ax3.legend()
         ax3.grid(True)
 
@@ -389,14 +310,14 @@ class QniverseModel(Model):
         if show==True:
             plt.show()
         plt.tight_layout()
-        fig_name = 'training_curves_tau_'+str(self.model_config['ind'])+'.png'
+        fig_name = 'training_curves_tau_'+str(self.model_config.get('ind', 0))+'.png'
         plt.savefig(os.path.join(self.logdir, fig_name), dpi=300, bbox_inches='tight')
         plt.close()
 
         # also save the raw data as a CSV file
         training_data = pd.DataFrame({
             'epoch': epochs,
-            'tau_P': train_logs['Tau_P'],
+            'beta': train_logs['Beta'],
             'total_loss': train_logs['Weight_loss'],
             'v_loss': train_logs['V_loss'],
             'p_loss': train_logs['P_loss'],
@@ -408,167 +329,99 @@ class QniverseModel(Model):
             'valid_mse': valid_logs['MSE'],
             'valid_mae': valid_logs['MAE']
         })
-        csv_file_name = 'training_data_tau_'+str(self.model_config['tau_hat_init'])+'.csv'
+        csv_file_name = 'training_data_tau_'+str(self.model_config.get('penalty_alpha', 0.0))+'.csv'
         training_data.to_csv(os.path.join(self.logdir, csv_file_name), index=False)
 
 
     def train_epoch(self, data_set):
-
         self.model.train()
-
         data_set.train()
-
         max_steps = len(data_set)
         if self.max_steps_per_epoch is not None:
             max_steps = min(self.max_steps_per_epoch, max_steps)
-
+        totals = {"Weight_loss": 0.0, "V_loss": 0.0, "P_loss": 0.0}
         count = 0
-        total_loss = 0
-        total_count = 0
-        v_loss = 0
-        p_loss = 0
-
-        metrics = []
-
-        for batch in data_set: # add
-            count += 1
-            if count > max_steps:
+        frames = []
+        for step, batch in enumerate(data_set):
+            if step >= max_steps:
                 break
-
             self.global_step += 1
-
-            data, label, index = batch["data"], batch["label"], batch["index"]
-            timestamp = batch.get("timestamp_feature")  # None unless phi_type is a timestamp predicate
-            data, label, index = data.to(device), label.to(device), index.to(device)
-            if timestamp is not None:
-                timestamp = timestamp.to(device)
-            feature = data[:, :, : -1]
-
-            feature = torch.nan_to_num(feature, nan=0.0)
-            label = torch.nan_to_num(label, nan=0.0)
-            if timestamp is not None:
-                timestamp = torch.nan_to_num(timestamp, nan=0.0)
-
-            # feature [batch_size, seq_len, num_fea]
-            pred = self.model(feature).squeeze() # B
-            
-            pred = torch.nan_to_num(pred, nan=0.0)
-
-            # pred [batch_size, horizon]
+            label = batch["label"].to(device).reshape(-1)
+            pred = self._forward_batch(batch)
+            if not torch.isfinite(pred).all():
+                raise FloatingPointError("non-finite prediction; refusing to replace it with zero")
+            # Keep the causal relation context intact; future label availability
+            # only selects supervised residuals AFTER the complete forward pass.
+            labelled = torch.isfinite(label)
+            if not labelled.any():
+                continue
             if self.use_weighted:
-                tau_hat = torch.sigmoid(self.model.alpha)
-                tau = 1 - tau_hat
-                loss_dict = self.criterion(self.phi_type, feature, timestamp, pred, label, tau_hat, tau)
-                loss = loss_dict['total']
+                descriptors = batch.get("predicates", {})
+                if set(descriptors) != set(self.predicates):
+                    raise ValueError("batch descriptors do not match the selected TSIL predicates")
+                parts = self.criterion(pred[labelled], label[labelled],
+                                       {name: values[labelled] for name, values in descriptors.items()})
+                loss = parts["total"]
             else:
-                loss = self.criterion(pred, label)
-
+                loss = self.criterion(pred[labelled], label[labelled])
+                parts = {"V_loss": loss, "P_loss": loss.new_zeros(())}
+            self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
-            self.optimizer.zero_grad()
-
-            total_loss += loss.item()
-            total_count += len(pred)
-
-            if self.use_weighted:
-                v_loss += loss_dict['V_loss'].item()
-                p_loss += loss_dict['P_loss'].item()
-
-            # compute IC and related metrics
-            X = np.c_[
-                pred.detach().cpu().numpy(),
-                label.cpu().numpy(),
-            ]
-            columns = ["score", "label"]
-            pred = pd.DataFrame(X, index=index.cpu().numpy(), columns=columns)
-            metrics.append(evaluate(pred))
-
-        total_loss /= total_count
-
-        if self.use_weighted:
-            metrics = pd.DataFrame(metrics)
-            metrics = {
-                "MSE": metrics.MSE.mean(),
-                "MAE": metrics.MAE.mean(),
-                "IC": metrics.IC.mean(),
-                "Rank_IC": metrics.Rank_IC.mean(),
-                'Weight_loss': total_loss,
-                'V_loss': v_loss/total_count,
-                'P_loss': p_loss/total_count,
-                'Tau_P': torch.sigmoid(self.model.alpha).item(),  # weight of the P matrix over training
-            }
-        else:
-            metrics = pd.DataFrame(metrics)
-            metrics = {
-                "MSE": metrics.MSE.mean(),
-                "MAE": metrics.MAE.mean(),
-                "IC": metrics.IC.mean(),
-                "Rank_IC": metrics.Rank_IC.mean(),
-            }
-
-        return total_loss, metrics
+            size = int(labelled.sum())
+            count += size
+            totals["Weight_loss"] += loss.item() * size
+            totals["V_loss"] += parts["V_loss"].item() * size
+            totals["P_loss"] += parts["P_loss"].item() * size
+            frames.append(pd.DataFrame({"score": pred.detach().cpu().numpy(), "label": label.cpu().numpy()},
+                          index=data_set.restore_index(batch["index"])))
+        if not count:
+            raise ValueError("training segment has no eligible samples")
+        metrics = evaluate_daily(pd.concat(frames))
+        metrics.update({key: value / count for key, value in totals.items()})
+        metrics["Beta"] = float(np.mean(list(self.betas.values()))) if self.betas else 0.0
+        return metrics["Weight_loss"], metrics
 
     def test_epoch(self, data_set, return_pred=False):
-
         self.model.eval()
         data_set.eval()
-
-        preds = []
-        metrics = []
-        total_inference_time = 0.0
-
-        for batch in data_set:
-            data, label, index = batch["data"], batch["label"], batch["index"]
-
-            feature = data[:, :, : -1]
-
-            feature = torch.nan_to_num(feature, nan=0.0)
-            label = torch.nan_to_num(label, nan=0.0)
-            with torch.no_grad():
-                start_time = time.time()
-                pred = self.model(feature).squeeze()
-                end_time = time.time()
-                pred = torch.nan_to_num(pred, nan=0.0)
-
-            total_inference_time += end_time - start_time
-
-            X = np.c_[
-                pred.cpu().numpy(),
-                label.cpu().numpy(),
-            ]
-            columns = ["score", "label"]
-
-            pred = pd.DataFrame(X, index=index.cpu().numpy(), columns=columns)
-
-            metrics.append(evaluate(pred))
-
-            if return_pred:
-                preds.append(pred)
-
-        metrics = pd.DataFrame(metrics)
-        metrics = {
-            "InfT": total_inference_time / len(data_set),
-            "MSE": metrics.MSE.mean(),
-            "MAE": metrics.MAE.mean(),
-            "IC": metrics.IC.mean(),
-            "Rank_IC": metrics.Rank_IC.mean(),
-        }
-
-
-        if return_pred:
-            preds = pd.concat(preds, axis=0)
-            preds.index = data_set.restore_index(preds.index) # 
-            preds.index = preds.index.swaplevel()
-            preds.sort_index(inplace=True)
-        print("preds")
-        print(preds)
-        return metrics, preds
+        frames = []
+        elapsed = 0.0
+        with torch.no_grad():
+            for step, batch in enumerate(data_set):
+                if step == 0:
+                    self._forward_batch(batch)  # unmeasured warm-up
+                if str(device).startswith("cuda"):
+                    torch.cuda.synchronize()
+                start = time.perf_counter()
+                pred = self._forward_batch(batch)
+                if str(device).startswith("cuda"):
+                    torch.cuda.synchronize()
+                elapsed += time.perf_counter() - start
+                label = batch["label"].to(device).reshape(-1)
+                if not torch.isfinite(pred).all():
+                    raise FloatingPointError("non-finite prediction during evaluation")
+                frames.append(pd.DataFrame({"score": pred.cpu().numpy(), "label": label.cpu().numpy()},
+                              index=data_set.restore_index(batch["index"])))
+        if not frames:
+            raise ValueError("evaluation segment has no eligible samples")
+        preds = pd.concat(frames)
+        preds = preds.reorder_levels(["datetime", "instrument"]).sort_index()
+        metrics = evaluate_daily(preds)
+        metrics["InfT_ms_per_sample"] = 1000.0 * elapsed / len(preds)
+        metrics["InfT"] = metrics["InfT_ms_per_sample"]
+        return metrics, preds if return_pred else None
     
-    def fit(self, dataset, evals_result=dict()):
+    def fit(self, dataset, evals_result=None, evaluate_test=True):
         
-        train_set, valid_set, test_set = dataset.prepare(["train", "valid", "test"])
+        if evals_result is None:
+            evals_result = {}
+        names = ["train", "valid", "test"] if evaluate_test else ["train", "valid"]
+        prepared = dataset.prepare(names)
+        train_set, valid_set = prepared[:2]
+        test_set = prepared[2] if evaluate_test else None
 
-        best_score = -1
+        best_score = float("-inf")
         best_epoch = 0
         stop_rounds = 0
         best_params = {
@@ -596,13 +449,14 @@ class QniverseModel(Model):
             self.logger.info("evaluating...")
             # average params for inference
             params_list["model"].append(copy.deepcopy(self.model.state_dict()))
-            self.model.load_state_dict(average_params(params_list["model"]))
+            if self.avg_params:
+                self.model.load_state_dict(average_params(params_list["model"]))
 
             valid_metrics = self.test_epoch(valid_set)[0]
             evals_result["valid"].append(valid_metrics)
             self.logger.info("\tvalid metrics: %s" % valid_metrics)
 
-            if self.eval_test:
+            if self.eval_test and evaluate_test:
                 test_metrics = self.test_epoch(test_set)[0]
                 evals_result["test"].append(test_metrics)
                 self.logger.info("\ttest metrics: %s" % test_metrics)
@@ -630,7 +484,7 @@ class QniverseModel(Model):
                     'P_loss': train_metrics['P_loss'],
                     'MSE': train_metrics['MSE'],
                     'MAE': train_metrics['MAE'],
-                    'Tau_P': train_metrics['Tau_P']
+                    'Beta': train_metrics['Beta']
                 })
 
                 valid_logs.append({
@@ -667,7 +521,9 @@ class QniverseModel(Model):
         self.logger.info("best score: %.6lf @ %d" % (best_score, best_epoch))
         self.model.load_state_dict(best_params["model"])
 
-        metrics, preds = self.test_epoch(test_set, return_pred=True)
+        if not math.isfinite(best_score):
+            raise ValueError("validation IC is undefined for all epochs; no checkpoint can be selected")
+        metrics, preds = self.test_epoch(test_set, return_pred=True) if evaluate_test else ({}, None)
         metrics['best_epoch'] = best_epoch
         metrics['best_score'] = best_score
         self.logger.info("test metrics: %s" % metrics)
@@ -677,18 +533,14 @@ class QniverseModel(Model):
 
             torch.save(best_params, self.logdir + "/model.bin")
 
-            fig_list = model_performance_graph(preds, show_notebook=False)
-            fig_name = [f"{self.model_type}_cumulative_return", f"{self.model_type}_distribution_return", f"{self.model_type}_IC",
-                        f"{self.model_type}_monthly_IC", f"{self.model_type}_distribution_IC", f"{self.model_type}_auto_corr"]
-            for i, fig in enumerate(fig_list):
-                fig: plotly.graph_objs.Figure = fig
-                fig.write_html(self.logdir + f'/{fig_name[i]}.html')
-            print("Vis Finished!")
-
-            preds.to_pickle(self.logdir + "/pred.pkl")
+            if preds is not None:
+                preds.to_pickle(self.logdir + "/pred.pkl")
+                if self.plot_training:
+                    from qlib.contrib.report.analysis_model.analysis_model_performance import model_performance_graph
+                    for i, fig in enumerate(model_performance_graph(preds, show_notebook=False)):
+                        fig.write_html(self.logdir + f"/performance_{i}.html")
 
             metrics = {k: float(v) if isinstance(v, np.floating) else v for k, v in metrics.items()}
-            self.model_config['tau_hat_init'] = float(self.model_config['tau_hat_init'])
             info = {
                 "config": {
                     "model_config": self.model_config,
@@ -706,16 +558,37 @@ class QniverseModel(Model):
             with open(self.logdir + "/info.json", "w") as f:
                 json.dump(info, f)
 
-            return preds, metrics
+        return preds, metrics
 
     def predict(self, dataset, segment="test"):
-
         test_set = dataset.prepare(segment)
-
-        metrics, preds = self.test_epoch(test_set, return_pred=True)
-        self.logger.info("test metrics: %s" % metrics)
-
+        _, preds = self.test_epoch(test_set, return_pred=True)
         return preds
+
+
+def evaluate_daily(pred):
+    """Metrics on finite target pairs; retain unlabeled scores for execution."""
+    if not isinstance(pred.index, pd.MultiIndex) or "datetime" not in pred.index.names:
+        raise ValueError("daily metrics require a datetime/instrument MultiIndex")
+    prediction_count = len(pred)
+    pred = pred[np.isfinite(pred.score) & np.isfinite(pred.label)]
+    error = pred.score - pred.label
+    daily = []
+    for _, group in pred.groupby(level="datetime", sort=True):
+        if len(group) < 2 or group.score.nunique() < 2 or group.label.nunique() < 2:
+            daily.append((float("nan"), float("nan")))
+        else:
+            daily.append((group.score.corr(group.label), group.score.corr(group.label, method="spearman")))
+    pairs = pd.DataFrame(daily, columns=["IC", "Rank_IC"])
+    result = {"MSE": error.pow(2).mean(), "MAE": error.abs().mean(),
+              "IC": pairs.IC.mean(), "Rank_IC": pairs.Rank_IC.mean(), "sample_count": len(pred),
+              "prediction_count": prediction_count}
+    for source, key in [("IC", "ICIR"), ("Rank_IC", "RankICIR")]:
+        values = pairs[source].dropna()
+        std = values.std(ddof=0)
+        result[key] = values.mean() / std if std > 0 else float("nan")
+    result["RankIC"] = result["Rank_IC"]
+    return result
 
 def evaluate_ori(pred):
     pred = pred.rank(pct=True)  # transform into percentiles

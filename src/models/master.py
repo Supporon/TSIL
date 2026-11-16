@@ -230,9 +230,6 @@ class MASTER(nn.Module):
         self.use_gate = getattr(configs, "use_gate", True)
         self.d_gate_input = (gate_input_end_index - gate_input_start_index)  # F'
         self.feature_gate = Gate(self.d_gate_input, enc_in, beta=beta)
-        self.alpha = torch.nn.Parameter(
-            torch.tensor(float(configs.tau_hat_init), dtype=torch.float32)
-        )
         self.x2y = nn.Linear(enc_in, d_model)
         self.pe = PositionalEncoding(d_model)
         self.tatten = TAttention(d_model=d_model, nhead=t_nhead, dropout=T_dropout_rate)
@@ -241,7 +238,7 @@ class MASTER(nn.Module):
         self.decoder = nn.Linear(d_model, 1)
 
     def forward(self, x):
-        src = x[:, :, :self.gate_input_start_index]  # N, T, D
+        src = x[:, :, :self.gate_input_start_index] if self.use_gate else x  # N, T, D
         if self.use_gate:
             gate_input = x[:, -1, self.gate_input_start_index:self.gate_input_end_index]
             src = src * torch.unsqueeze(self.feature_gate(gate_input), dim=1)

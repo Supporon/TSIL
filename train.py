@@ -1,214 +1,129 @@
-"""Single-run training entry point for TSIL.
+"""Train one fixed configuration, or evaluate a selected checkpoint on test.
 
-Runs one backbone on one market through train -> predict -> backtest -> report.
-
-Usage
------
-All parameters from the YAML:
-    python train.py --config_file configs/f158_csi300/config_lstm.yaml
-
-Override YAML fields from the command line (any omitted flag keeps the YAML value):
-    python train.py --config_file configs/f158_csi300/config_lstm.yaml \
-        --phi_type phi_momentum --tau_hat_init 2.0 --market csi800 --seed 42
-
-The loss mode is driven entirely by --phi_type (there is no separate loss_type):
-    mse         -> plain MSE                         (the Original baseline; config default)
-    ones        -> weighted MSE with the Phi_ones control predicate
-    <temporal>  -> weighted MSE with a paper temporal predicate, e.g. phi_momentum,
-                   phi_volatility, phi_return_dist, phi_cycle, phi_phase,
-                   phi_timestamp
-
-Each backbone ships one config per market (config_<model>.yaml); the same
-config becomes any mode via --phi_type, and any market via --market.
-
---seed accepts multiple values; each is run in turn. Default seeds: 42 2022 2023 2024 2025.
+Use search.py for validation-only model selection, then --checkpoint with the
+saved config.yaml. Portfolio results come from Qlib's executed trades.
 """
 import argparse
-import os
-import sys
+import copy
+import json
+from pathlib import Path
 
-os.chdir(sys.path[0])
-
-import warnings
-warnings.filterwarnings("ignore")
-
-import numpy as np
-import pandas as pd
-import qlib
 import ruamel.yaml as YAML
-from qlib.utils import init_instance_by_config
-from qlib.workflow import R
-from qlib.workflow.record_temp import SignalRecord, SigAnaRecord, PortAnaRecord
+import numpy as np
+import torch
 
-from basktesting import calculate_portfolio_metrics, top_k_drop_strategy
-from src.run_utils import DEFAULT_SEEDS, apply_overrides, build_report
-
-
-def get_experiment_metrics(file_name, recorder=None):
-    """Read the portfolio analysis metrics for the report.
-
-    Portfolio metrics are written to MLflow asynchronously (`async_log`), so
-    globbing the metrics/ directory at report time can race the flush and miss
-    keys. The port_analysis_1day.pkl artifact is saved synchronously by
-    PortAnaRecord, so we read it directly and rebuild the flat
-    "1day.<group>.<metric>" keys the report expects.
-    """
-    from pathlib import Path
-
-    if recorder is not None:
-        try:
-            pa = recorder.load_object("portfolio_analysis/port_analysis_1day.pkl")
-            flat = {f"1day.{g}.{m}": float(v) for (g, m), v in pa["risk"].items()}
-            if flat:
-                return flat
-        except Exception as e:
-            print(f"port_analysis pkl unavailable, falling back to metric files: {e}")
-
-    folder = Path(file_name)
-    file_dict = {}
-    for file_path in folder.glob("*"):
-        if file_path.is_file():
-            try:
-                v = file_path.read_text(encoding="utf-8")
-                file_dict[file_path.name] = float(v.split(" ")[1])
-            except Exception as e:
-                print(f"skip {file_path.name}: {e}")
-    return file_dict
+from src.run_utils import (DEFAULT_SEEDS, apply_overrides, build_report,
+                           configure_dataset, configure_run, portfolio_analysis)
 
 
-def main(seed, config, config_file):
-    qlib.init(
-        provider_uri=config["qlib_init"]["provider_uri"],
-        region=config["qlib_init"]["region"],
-        kernels=1, # single-process load when debugging, so fork doesn't break debugpy's socket
-    )
+def evaluate_checkpoint(model, dataset, checkpoint):
+    """Load the already selected weights; never fit or inspect validation again."""
+    checkpoint = Path(checkpoint)
+    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    model.model.load_state_dict(state["model"])
+    metrics, preds = model.test_epoch(dataset.prepare("test"), return_pred=True)
+    info = json.loads((checkpoint.parent / "info.json").read_text(encoding="utf-8"))
+    metrics.update({key: info["metric"][key] for key in ("best_epoch", "best_score")})
+    return preds, metrics
 
-    exp_settings = config.get("experiment_settings", {
-        "exp_path": config["logdir"] + "/experiments",
-        "experiment_name": "test_Experiment",
-        "recorder_name": "test_Recorder",
+
+def execute_backtest(preds, config):
+    """Use Qlib's next-step signal execution, lot rounding and trade filters."""
+    from qlib.backtest import backtest
+    config = copy.deepcopy(config)
+    config["strategy"]["kwargs"]["signal"] = preds["score"]
+    executor = config.get("executor", {
+        "class": "SimulatorExecutor", "module_path": "qlib.backtest.executor",
+        "kwargs": {"time_per_step": "day", "generate_portfolio_metrics": True},
     })
-    exp_path = exp_settings["exp_path"]
-    os.makedirs(exp_path, exist_ok=True)
-    R.set_uri(exp_path)
+    portfolios, _ = backtest(executor=executor, strategy=config["strategy"], **config["backtest"])
+    return portfolios["1day"]  # daily report and actual positions
 
-    with R.start(
-        experiment_name=exp_settings["experiment_name"],
-        recorder_name=exp_settings["recorder_name"],
-    ):
-        logdir = config["task"]["model"]["kwargs"]["logdir"]
-        model_type = config["task"]["model"]["kwargs"]["model_type"]
 
-        # The dataset extracts calendar/timestamp features only when the loss uses
-        # the timestamp predicate. phi_type lives in model_config, so pass it through
-        # to the dataset kwargs before instantiation.
-        config["task"]["dataset"]["kwargs"]["phi_type"] = config["model_config"].get("phi_type")
-        dataset = init_instance_by_config(config["task"]["dataset"])
-        model = init_instance_by_config(config["task"]["model"])
+def main(seed, config, config_file=None, checkpoint=None):
+    import qlib
+    from qlib.utils import init_instance_by_config
 
-        # All shipped backbones are neural QniverseModel: fit() returns (preds, metrics).
-        # The tree-model branch is kept only for completeness.
-        if model_type not in ["XGBoost", "LightGBM"]:
-            preds, metrics = model.fit(dataset)
-        else:
-            model.fit(dataset)
-            preds = model.predict(dataset)
-            preds = preds.to_frame(name="score")
-            ori_index = preds.index
-            preds = preds.reset_index(drop=True)
-            label = dataset.prepare("test", col_set=["label"]).data_arr[:-1]
-            label = pd.Series(label.reshape(-1, )).to_frame(name="label")
-            preds = pd.concat([preds, label], axis=1).dropna().reset_index(drop=True)
-            preds.set_index(ori_index, inplace=True)
-            scores = preds["score"].values
-            labels = preds["label"].values
-            metrics = {"InfT": -1, "MSE": np.mean((labels - scores) ** 2),
-                       "MAE": np.mean(np.abs(labels - scores))}
-
-        per_df = preds.reset_index()
-        per_df = per_df.sort_values(["datetime", "instrument"])
-        per_df["group_id"] = per_df.groupby(["datetime", "instrument"]).cumcount()
-
-        r_metrics = {"IC": [], "ICIR": [], "RankIC": [], "RankICIR": []}
-        strategy_config = config["strategy_config"]
-
-        sub_df = per_df[per_df["group_id"] == 0]
-        sub_df = sub_df.set_index(["datetime", "instrument"])
-        sub_df = sub_df[["score", "label"]]
-
-        # Ranking metrics
-        ic = sub_df.groupby(level=0).apply(
-            lambda group: group["score"].corr(group["label"])).to_numpy()
-        icir = ic.mean() / ic.std()
-        ic = ic.mean()
-        rankic = sub_df.groupby(level=0).apply(
-            lambda group: group["score"].corr(group["label"], method="spearman")).to_numpy()
-        rankicir = rankic.mean() / rankic.std()
-        rankic = rankic.mean()
-        r_metrics["IC"].append(ic)
-        r_metrics["ICIR"].append(icir)
-        r_metrics["RankIC"].append(rankic)
-        r_metrics["RankICIR"].append(rankicir)
-
-        r_df = [top_k_drop_strategy(sub_df, top_k=strategy_config["topk"],
-                                    n=strategy_config["hold_thre"],
-                                    commission_rate=strategy_config["commission_rate"])]
-        r_df = pd.concat(r_df, ignore_index=True)
-        portfolio_metrics, df = calculate_portfolio_metrics(r_df)
-        metrics.update(portfolio_metrics)
-        metrics.update({key: np.mean(values) for key, values in r_metrics.items()})
-
-        # Qlib signal / portfolio analysis records (source of the report's AR/IR).
-        port_analysis_config = config["port_analysis_config"]
-        recorder = R.get_recorder()
-        SignalRecord(model, dataset, recorder).generate()
-        SigAnaRecord(recorder).generate(label=preds[["label"]])
-        PortAnaRecord(recorder, port_analysis_config, "day").generate()
-
-        df.to_csv(f"./{logdir}/backtest_result_seed{seed}.csv")
-        analysis_dict = get_experiment_metrics(
-            recorder.uri + "/" + recorder.experiment_id + "/" + recorder.id + "/metrics/",
-            recorder)
-
-        report = build_report(metrics, analysis_dict)
-        print(report)
-        tag = f"{config['model_config'].get('phi_type', 'mse')}_tau{config['model_config']['ind']}_seed{seed}"
-        with open(f"./{logdir}/backtest_report_{tag}.txt", "w") as f:
-            f.write(report)
-    return metrics
+    if checkpoint is None:
+        config = configure_run(config, seed)
+    else:
+        config = copy.deepcopy(config)
+        if seed != config["task"]["model"]["kwargs"]["seed"]:
+            raise ValueError("checkpoint evaluation must use its saved configuration and seed")
+        config["logdir"] = str(Path(checkpoint).resolve().parent / "test_evaluation")
+        config["task"]["model"]["kwargs"]["logdir"] = config["logdir"]
+        configure_dataset(config)
+    logdir = Path(config["logdir"])
+    logdir.mkdir(parents=True, exist_ok=True)
+    with (logdir / "config.yaml").open("w", encoding="utf-8") as stream:
+        YAML.YAML().dump(config, stream)
+    qlib.init(provider_uri=config["qlib_init"]["provider_uri"],
+              region=config["qlib_init"]["region"], kernels=1)
+    dataset = init_instance_by_config(config["task"]["dataset"])
+    model = init_instance_by_config(config["task"]["model"])
+    if checkpoint is None:
+        preds, metrics = model.fit(dataset)
+    else:
+        preds, metrics = evaluate_checkpoint(model, dataset, checkpoint)
+    if not preds.index.is_unique:
+        raise ValueError("prediction index must contain each stock-date once")
+    preds.to_pickle(logdir / "pred.pkl")
+    daily, positions = execute_backtest(preds, config["port_analysis_config"])
+    daily.to_csv(logdir / "backtest_daily.csv")
+    # Preserve the actual executed holdings for audit, not a label-average proxy.
+    import pickle
+    with (logdir / "positions.pkl").open("wb") as stream:
+        pickle.dump(positions, stream)
+    analysis = portfolio_analysis(daily)
+    report = build_report(metrics, analysis)
+    (logdir / "backtest_report.txt").write_text(report, encoding="utf-8")
+    result = {"prediction": metrics, "portfolio": analysis, "seed": int(seed),
+              "source_config": str(config_file), "checkpoint": str(checkpoint) if checkpoint else None,
+              "execution": "signal at t, Qlib execution at next trading step; close prices with side-specific slippage",
+              "portfolio_convention": "arithmetic annualization 252; daily return std ddof=1; additive drawdown"}
+    # Undefined ICIR on constant daily IC is recorded as null, not misleading zero.
+    import math
+    def finite(value):
+        if isinstance(value, dict):
+            return {key: finite(item) for key, item in value.items()}
+        if isinstance(value, np.generic):
+            value = value.item()
+        return None if isinstance(value, float) and not math.isfinite(value) else value
+    (logdir / "metrics.json").write_text(json.dumps(finite(result), indent=2, ensure_ascii=False,
+                                                   allow_nan=False), encoding="utf-8")
+    print(report)
+    return result
 
 
 def build_argparser():
-    p = argparse.ArgumentParser(allow_abbrev=False, description="TSIL single-run training")
-    p.add_argument("--config_file", type=str, required=True, help="path to a YAML config")
-    p.add_argument("--seed", type=int, nargs="+", default=DEFAULT_SEEDS,
-                   help="one or more random seeds (default: 42 2022 2023 2024 2025)")
-    # YAML overrides (None => keep the value in the config file)
-    p.add_argument("--phi_type", type=str, default=None,
-                   help="loss/predicate selector: mse (plain MSE) | ones (Phi_ones "
-                        "control) | a temporal predicate key, e.g. phi_momentum")
-    p.add_argument("--base_model", type=str, default=None, help="base RNN for LSR_IGRU")
-    p.add_argument("--tau_hat_init", type=float, default=None)
-    p.add_argument("--lr", type=float, default=None)
-    p.add_argument("--d_model", type=int, default=None)
-    p.add_argument("--e_layers", type=int, default=None)
-    p.add_argument("--batch_size", type=int, default=None)
-    p.add_argument("--market", type=str, default=None, choices=["csi300", "csi800"])
-    return p
+    parser = argparse.ArgumentParser(allow_abbrev=False, description=__doc__)
+    parser.add_argument("--config_file", required=True)
+    parser.add_argument("--checkpoint", help="selected model.bin; requires its saved config.yaml")
+    parser.add_argument("--seed", type=int, nargs="+", default=None)
+    parser.add_argument("--phi_type", default=None)
+    parser.add_argument("--injection_mode", choices=["original", "feature", "tsil"])
+    parser.add_argument("--penalty_alpha", type=float)
+    parser.add_argument("--base_model")
+    parser.add_argument("--lr", type=float)
+    parser.add_argument("--d_model", type=int)
+    parser.add_argument("--e_layers", type=int)
+    parser.add_argument("--batch_size", type=int)
+    parser.add_argument("--market", choices=["csi300", "csi800"])
+    return parser
 
 
 if __name__ == "__main__":
     args = build_argparser().parse_args()
-
-    with open(args.config_file) as f:
-        config = YAML.YAML(typ="safe", pure=True).load(f)
-
-    config = apply_overrides(config, args)
-
-    seeds = args.seed if isinstance(args.seed, list) else [args.seed]
+    with open(args.config_file, encoding="utf-8") as stream:
+        config = YAML.YAML(typ="safe").load(stream)
+    if args.checkpoint:
+        overrides = [name for name in ("phi_type", "injection_mode", "penalty_alpha", "base_model",
+                     "lr", "d_model", "e_layers", "batch_size", "market") if getattr(args, name) is not None]
+        if overrides:
+            raise ValueError(f"do not alter a selected checkpoint's configuration: {overrides}")
+        seeds = args.seed or [config["task"]["model"]["kwargs"]["seed"]]
+    else:
+        config = apply_overrides(config, args)
+        seeds = args.seed or DEFAULT_SEEDS
     for seed in seeds:
-        print("=" * 60)
-        print(f"[run] config={args.config_file} seed={seed} "
-              f"phi={config['model_config'].get('phi_type')}")
-        print("=" * 60)
-        main(seed, config, args.config_file)
+        main(seed, config, args.config_file, args.checkpoint)

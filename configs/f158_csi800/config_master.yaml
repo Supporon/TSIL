@@ -32,7 +32,7 @@ model_config: &model_config
   dropout: 0.5
   use_attn: True
   noise_level: 0.0
-  tau_hat_init: 0.0
+  penalty_alpha: 0.0  # fixed beta = sigmoid(penalty_alpha)
   plot_show: False
 
 
@@ -43,19 +43,15 @@ data_handler_config: &data_handler_config
     fit_end_time: 2022-12-31
     instruments: *market
     infer_processors:
-        - class: RobustZScoreNorm
+        - class: CSZScoreNorm
           kwargs:
               fields_group: feature
-              clip_outlier: true
         - class: Fillna
           kwargs:
               fields_group: feature
     learn_processors:
         - class: DropnaLabel
-        - class: CSRankNorm
-          kwargs:
-              fields_group: label
-    label: ["Ref($close, -2) / Ref($close, -1) - 1"]
+    label: ["Ref($close, -1) / $close - 1"]
 
 port_analysis_config: &port_analysis_config
     strategy:
@@ -72,7 +68,8 @@ port_analysis_config: &port_analysis_config
         benchmark: *benchmark
         exchange_kwargs:
             limit_threshold: 0.095
-            deal_price: close
+            deal_price: ["$close * 1.0001", "$close * 0.9999"]
+            trade_unit: 100
             open_cost: 0.0005
             close_cost: 0.0015
             min_cost: 5
@@ -85,7 +82,8 @@ task:
         lr: 1e-4
         n_epochs: 50
         max_steps_per_epoch: 5000
-        early_stop: 10
+        early_stop: 20
+        avg_params: false
         seed: 2025
         logdir: *logdir
         model_type: MASTER

@@ -86,9 +86,6 @@ class TCN(nn.Module):
         self.d_ff = configs.d_ff
         self.num_layers = configs.e_layers
         self.num_channels = [configs.d_model] * self.num_layers
-        self.alpha = torch.nn.Parameter(
-            torch.tensor(float(configs.tau_hat_init), dtype=torch.float32)
-        )
 
         self.tcn = TemporalConvNet(self.input_size, self.num_channels, configs.kernel_size, dropout=configs.dropout)
         self.projection = nn.Sequential(

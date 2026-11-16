@@ -1,439 +1,157 @@
-# TSIL: Temporal Statistical Invariant Learning for Stock Prediction
+# TSIL: original-paper method alignment
 
-TSIL is a **training-time regularization framework** for stock return forecasting.
-On top of any backbone predictor, it injects domain temporal knowledge through
-**temporal predicates** Φ and enforces **statistical-invariant constraints** built
-from the structural similarity matrix `P = Φ Φᵀ`. This steers the model to respect
-batch-level temporal/statistical structure instead of fitting each sample in
-isolation, improving the rank quality and tradability of the predicted signal.
+This branch repairs the implementation released at commit
+`5b5ab68fb44741bae72381f015f3b2eb5b4eb3ff` to follow the original TSIL manuscript.
+See [the Chinese change report](docs/PAPER_ALIGNMENT_REPORT_ZH.md) for evidence,
+before/after comparisons, explicit conventions and remaining reproduction limits.
+The historical paper tables have **not** been reproduced by this repair.
 
-This repository is the reference implementation accompanying the paper. It is a
-cleaned, reproducible subset of the research codebase containing only the canonical
-pipeline (training entrypoints, the TSIL backend, the dataset loader, the nine
-backbones used in the paper, and the experiment configs).
+## Objective and descriptors
 
----
+For residual `e = prediction - raw_next_day_return` and a batch of `B` labeled
+stock-date samples:
 
-## 1. Method overview
-
-For a mini-batch of size `B`, let `ŷ` be predictions and `y` labels. The standard
-objective is the per-sample MSE. TSIL augments it with an invariant penalty:
-
-```
-L_TSIL = L_task + Σ_s β_s · || (1/B) · Φ̃_sᵀ (ŷ − y) ||²₂
+```python
+loss = mean(e ** 2)
+for name, phi in descriptors.items():
+    normalized = phi.detach() / (phi.detach().norm() + 1e-8)
+    loss += beta[name] * ((normalized.T @ e) / B).square().sum()
 ```
 
-where each predicate `Φ_s` maps the batch to a descriptor, `Φ̃_s` is its L2-normalized
-form, and `P_s = Φ_s Φ_sᵀ` is the resulting structural similarity matrix. In the
-implementation the loss is realized in weighted least-squares form:
+`beta = sigmoid(penalty_alpha)` is fixed during a run; alpha is selected from
+`[-4,-2,0,2,4]` using validation daily IC. The backbone has no trainable loss
+coefficient. Training never materializes a `B x B` predicate Gram matrix.
 
-```
-weight_matrix = tau_hat · I + tau · P
-L = mean( weight_matrix · (ŷ − y)² )
-```
+| Canonical key | Causal raw descriptor | Default dimension |
+|---|---|---:|
+| `phi_timestamp` | Fixed weekday/month OneHot | 19 |
+| `phi_cycle` | Market-return time FFT, non-DC period, global-day sin/cos | 2 |
+| `phi_phase` | Asset-return time FFT, global trading-day modulo phase | 20 |
+| `phi_momentum` | `log(close_t/close_(t-k))`, k=5,10,20 | 3 |
+| `phi_volatility` | Population std of realized returns, w=10,20,40 | 3 |
+| `phi_return_dist` | 20-day mean, population std, skew, excess kurtosis | 4 |
+| `ones` | Constant control; excluded from main-table predicate selection | 1 |
 
-- `I` is the identity (the ordinary per-sample MSE term).
-- `P = Φ Φᵀ` couples samples that share temporal/statistical structure.
-- `tau_hat = sigmoid(model.alpha)` is a **learnable** scalar, `tau = 1 − tau_hat`.
-  The model adaptively trades off pointwise convergence (`I`) against the
-  invariant constraint (`P`) over training.
+The approved windows are in `src/temporal_predicates.py`. Raw Qlib `$close` data
+are loaded independently of the 20-day Alpha158 input; 40 return observations
+require 41 price observations. No standardized factor is treated as a price.
+Historical membership masks determine the equal-weight market return. Calendar
+origin, timestamp categories and market aggregation are explicit implementation
+conventions because the manuscript does not fix them completely.
 
-The predicate used to build `P` is selected **solely** by the `phi_type` config
-field (there is no separate `loss_type`; see §6). Each backbone ships **one config
-per market** (`config_<model>.yaml`, default `phi_type: mse`, the plain-MSE
-baseline). The loss mode is then chosen **at the command line** via `--phi_type`,
-which `train.py`/`search.py` overlay onto the config — no separate per-variant
-files:
-- `--phi_type mse`  → plain MSE (the Original baseline; the config default).
-- `--phi_type ones` → weighted MSE with the all-ones control predicate `Φ_ones`.
-- `--phi_type phi_momentum` (or any temporal key) → weighted MSE with a paper
-  temporal predicate.
+Original, Feature and TSIL use the same causal history eligibility. Feature
+repeats the same raw descriptor along the input time axis; TSIL uses it only in
+the training loss. Full consecutive feature windows are required. Labels are
+`Ref($close,-1)/$close-1`, unranked; Alpha158 inputs use daily CSZScoreNorm.
+Labels extending beyond a split endpoint are purged. Missing future labels
+never remove stocks before a relationship-model forward pass: only supervised
+losses and metrics mask those labels afterward.
 
-The full set of temporal predicates lives in `src/temporal_predicates.py` and
-`src/custom_phi_constructors.py`, selected by setting `--phi_type` to e.g.
-`phi_momentum`, `phi_volatility`, `phi_return_dist`, … (full list in §6).
+## Installation and data
 
-The whole mechanism is **backbone-agnostic and output-level**: predicates read the
-batch input/labels and act on the prediction error, so the same TSIL loss wraps
-every backbone unchanged.
-
----
-
-## 2. Repository layout
-
-```
-release/
-├── train.py                        # single-run entry: one backbone/market, loss via --phi_type
-├── search.py                       # hyper-parameter search entry (Optuna/TPE, validation-IC)
-├── basktesting.py                  # Top-K Dropout backtest + portfolio metrics
-├── requirements.txt
-├── LICENSE                         # GPL-3.0
-├── src/
-│   ├── model_backbone_phitp.py     # QniverseModel + TSIL loss (WeightedMSELoss), phi_type-driven
-│   ├── temporal_predicates.py      # the paper's six temporal predicates (Φ_ts/cycle/phase/mom/vol/dist)
-│   ├── custom_phi_constructors.py  # extra domain temporal predicates (momentum, vol, …)
-│   ├── run_utils.py                # shared defaults + config overrides for both entries
-│   ├── dataset_ori_onehot.py       # MTSDatasetH time-series dataset loader (phi_type-aware)
-│   ├── timefeatures.py             # timestamp feature construction
-│   └── models/                     # 11 backbone implementations
-│       ├── LSTM.py  GRU.py  TCN.py  Transformer.py  GAT.py  # domain-agnostic
-│       └── LSR_IGRU.py  MASTER.py  MERA.py  StockMixer.py   # stock-specialized
-├── configs/
-│   ├── f158_csi300/                # CSI 300, one config per backbone (9 models, loss via --phi_type)
-│   └── f158_csi800/                # CSI 800, one config per backbone (9 models, loss via --phi_type)
-```
-
-> The two entry points share their defaults and config-mutation logic through
-> `src/run_utils.py` (`DEFAULT_SEEDS`, `DEFAULT_SEARCH_SPACE`, `TAU_VALUES`,
-> `apply_overrides`, `inject_model_specific_params`).
-
----
-
-## 3. Installation
+Use Python 3.10–3.12 and a fresh environment:
 
 ```bash
-# Python 3.10–3.12; create a fresh env, then:
 pip install -r requirements.txt
+pip install pytest==8.4.2
 ```
 
-Core dependencies (`requirements.txt`):
+Verification used Python 3.12.14, PyTorch 2.3.1 CPU and Qlib 0.9.6. The manuscript
+states PyTorch 1.13.1 / Qlib 0.8.0; this is not a verification of that older
+environment. Joblib is pinned to 1.4.2 because Qlib 0.9.6's ParallelExt fails
+against the newer backend API. Full tested versions are recorded in
+`docs/verification/environment.txt`.
 
-| Package      | Version  |        | Package      | Version  |
-|--------------|----------|--------|--------------|----------|
-| numpy        | 1.26.4   |        | pyqlib       | 0.9.6    |
-| pandas       | 2.2.3    |        | scipy        | 1.14.1   |
-| scikit-learn | 1.5.2    |        | statsmodels  | 0.14.2   |
-| torch        | 2.3.1    |        | matplotlib   | 3.10.0   |
-| torchvision  | 0.18.1   |        | plotly       | 5.24.1   |
-| torchaudio   | 2.3.1    |        | ruamel.yaml  | 0.18.14  |
-|              |          |        | tqdm         | 4.66.5   |
+Supply a Qlib provider at `qlib_data/cn_data`, or edit `qlib_init.provider_uri`.
+It must contain the historical CSI300/CSI800 membership, trading calendar,
+OHLCV, close, factor and benchmark series. The original paper dates remain:
+train 2018–2022, validation 2023, test January 2024–August 2025. Preserve the
+provider's earlier calendar/history so global phases and long windows are
+reproducible. No real-market dataset is bundled here.
 
-`scipy` and `statsmodels` are required at import time by the loss module
-(`statsmodels.tsa.stattools.acf` powers the autocorrelation predicate); the
-visualization/serialization deps (`matplotlib`, `plotly`, `ruamel.yaml`,
-`tqdm`) are imported by the training/report path.
-
-This release was verified end-to-end on Python 3.12 with torch 2.3.1 (CUDA
-12.1). A CUDA-capable GPU is recommended; the code falls back to CPU
-automatically.
-
----
-
-## 4. Data preparation
-
-The pipeline runs on [Qlib](https://github.com/microsoft/qlib) China A-share data
-with the **Alpha158** feature handler (158 features). Place the Qlib binary data so
-that the provider URI in the configs resolves:
-
-```
-release/qlib_data/cn_data/        # provider_uri: "./qlib_data/cn_data"
-```
-
-Obtain `cn_data` via Qlib's official downloader (`python -m qlib.run.get_data
-qlib_data --target_dir ./qlib_data/cn_data --region cn`) or your own dump. If
-your data lives elsewhere, a symlink is the simplest wiring:
+## Select configurations without evaluating test
 
 ```bash
-ln -s /path/to/your/qlib_data ./qlib_data   # so ./qlib_data/cn_data resolves
+python search.py --config_file configs/f158_csi300/config_lstm.yaml --models LSTM GRU TCN Transformer GAT LSR_IGRU MASTER MERA StockMixer --market csi300 --injection_mode tsil --n_trials 50 --output_dir output_search_csi300_tsil
 ```
 
-Quick check that the data resolves and covers the experiment window:
+Defaults include Original (`mse`), the ones control, all six temporal predicates
+and seeds `42 2022 2023 2024 2025`. Network selection uses Original/seed 2025,
+then freezes the network while selecting each seed/predicate's fixed beta.
+For GAT, MASTER and LSR-IGRU, the approved batch search is **2/4/8 complete
+trading days**; each day is forwarded independently before joining residuals.
+Other models search 256/512/1024 stock-date samples. Different runs have separate
+output paths containing the actual seed and a configuration digest.
+
+Feature must reuse those exact network choices:
 
 ```bash
-head -1 qlib_data/cn_data/calendars/day.txt   # should be ≤ 2018-01-01
-tail -1 qlib_data/cn_data/calendars/day.txt   # should be ≥ 2025-08-31
-ls qlib_data/cn_data/instruments/             # expect csi300.txt, csi800.txt, …
+python search.py --config_file configs/f158_csi300/config_lstm.yaml --models LSTM GRU TCN Transformer GAT LSR_IGRU MASTER MERA StockMixer --market csi300 --injection_mode feature --frozen_network_manifest output_search_csi300_tsil/selection_manifest.json --output_dir output_search_csi300_feature
 ```
 
-> The public Qlib `cn_data` dump typically ends before the paper's
-> 2024–2025 test window. To reproduce the paper exactly you need a dump that
-> spans 2018-01-01 → 2025-08-31 (CSI 300 / CSI 800 membership included).
+Repeat with `csi800` and separate output directories. A manifest records all
+selected checkpoints/configs, candidate validation ICs, and a common main-table
+predicate selected by mean validation daily IC over the five seeds (first wins
+ties). This aggregation rule is a disclosed convention. `ones` is never a
+candidate for that main-table choice. Search does not prepare or evaluate test.
 
-Features and labels are produced inside the config via the Alpha158 handler; the
-label is the two-day forward return `Ref($close, -2) / Ref($close, -1) - 1`.
-Feature processing: `RobustZScoreNorm` (clip outliers) + `Fillna`; label
-processing: `DropnaLabel` + `CSRankNorm`.
+## Final evaluation and fixed runs
 
-**Chronological split** (set per config, identical across markets):
-
-| Segment | Range                       |
-|---------|-----------------------------|
-| train   | 2018-01-01 → 2022-12-31     |
-| valid   | 2023-01-01 → 2023-12-31     |
-| test    | 2024-01-01 → 2025-08-31     |
-
----
-
-## 5. Running experiments
-
-There are two entry points: `train.py` for a single run and `search.py` for a
-hyper-parameter search.
-
-### `train.py` — single run
-
-Pick the backbone with `--config_file` (one config per backbone per market) and
-the loss mode with `--phi_type`:
+For each selected run in the manifest, use its saved paths:
 
 ```bash
-# Original baseline (plain MSE — the config default)
-python train.py --config_file configs/f158_csi300/config_lstm.yaml --seed 42
-
-# TSIL-Enhanced with a temporal predicate
-python train.py --config_file configs/f158_csi300/config_lstm.yaml \
-    --phi_type phi_momentum --tau_hat_init 2.0 --seed 42
+python train.py --config_file PATH_TO_SELECTED/config.yaml --checkpoint PATH_TO_SELECTED/model.bin
 ```
 
-Available overrides: `--phi_type --base_model --tau_hat_init --lr
---d_model --e_layers --batch_size --market --seed`.
+The checkpoint path evaluates only test; it does not refit or reselect weights.
+Use `selected_by_predicate` for complete supplementary comparisons and
+`selected_runs` for the common main-table predicate. Aggregate each model/form/
+predicate's five final test runs as mean and standard deviation; never choose
+which result to report by looking at test scores.
 
-- **Mode selection (`--phi_type`).** The loss mode is driven entirely by
-  `phi_type` (there is no `loss_type` flag):
-  `mse` → *Original* (plain MSE); `ones` → the `Φ_ones` weighted control;
-  `<temporal key>` (e.g. `phi_momentum`) → *TSIL-Enhanced* (invariant penalty).
-  Any key from §6 is valid.
-- **Multiple seeds.** `--seed` accepts a list and runs each in turn; the default
-  is `42 2022 2023 2024 2025` (`DEFAULT_SEEDS` in `src/run_utils.py`). One report
-  is written per seed. Pass a single value (`--seed 2025`) for a one-off run.
-- **Market.** `--market csi800` (or `csi300`) retargets the universe,
-  benchmark, and instrument set in one flag.
-
-Each backbone ships **one config per market** (`config_<model>.yaml`,
-default `phi_type: mse`). The same config becomes any mode via `--phi_type`, so
-there are no separate `*_phi.yaml`/`*_tp.yaml` files. All CSI 300 and CSI 800
-configs use the 2-day label `Ref($close, -2)/Ref($close, -1) - 1` for a strictly
-controlled Original-vs-TSIL comparison.
-
-### `search.py` — hyper-parameter search
-
-Searches `lr × layers × d_model × batch_size × tau` with Optuna (TPE Bayesian
-search) for one or more backbones and predicates, **selecting the best
-configuration by validation IC** (the IC of the best epoch on the validation
-segment, read from `model.fit`). The test segment is never used to pick
-hyper-parameters.
+A fixed run, without a search, is also supported:
 
 ```bash
-python search.py --config_file configs/f158_csi300/config_lstm.yaml \
-    --models LSTM GRU --phi_types phi_momentum --market csi300 --n_trials 50
+python train.py --config_file configs/f158_csi300/config_lstm.yaml --phi_type phi_momentum --injection_mode tsil --penalty_alpha 2 --seed 42
 ```
 
-Default search space (`DEFAULT_SEARCH_SPACE` / `TAU_VALUES` in
-`src/run_utils.py`):
+Outputs include checkpoint, prediction pickle, resolved YAML, daily executed
+portfolio returns, actual holdings, JSON metrics and a text report. IC/RankIC
+are calculated across stocks per day, then averaged over days; their IR uses
+population daily std (`ddof=0`). Undefined correlations/IR are reported as
+undefined, not replaced with zero. Inference is synchronized and reported in
+**ms/sample**, excluding data loading and descriptor-cache construction.
 
-| Param   | Values                          |
-|---------|---------------------------------|
-| lr      | 0.001, 0.0001, 0.00001          |
-| layers  | 1 – 3                           |
-| d_model | 64, 128, 256                    |
-| bs      | 256, 512, 1024                  |
-| tau     | -4.0, -2.0, 0.0, 2.0, 4.0       |
+Qlib executes scores at the next trading step. Backtest settings are Top-50,
+Drop-5, buy/sell fees 0.05%/0.15%, close-price slippage +0.01%/-0.01%, trade unit
+100 and minimum fee 5. Factor data are required for Qlib lot conversion. The
+retained `limit_threshold=0.095` is Qlib's uniform limit proxy; it is not a
+verified board/ST-specific Chinese price-limit calendar. Suspended stocks are
+filtered by the exchange. Reports distinguish absolute strategy returns from
+benchmark-relative excess returns, with explicitly chosen arithmetic 252-day
+annualization, daily std `ddof=1` and additive drawdown. A score's prediction
+target t→t+1 is not substituted for the return of an executable trade at t+1.
 
-`--early_stop N` stops a study after `N` trials without improvement. Outputs per
-model/predicate/tau combination: `trial_history.csv`, `optimization_report.txt`,
-optimization plots under `visualizations/`, plus a top-level `all_best_results.csv`.
-
-### Stock-specialized baselines (LSR-IGRU, MASTER, MERA, StockMixer)
-
-The same `train.py` runs the baseline backbones; their architecture-specific
-parameters live in each baseline config's `model_config` block (they are **not**
-auto-injected by `train.py` — only `search.py` calls
-`inject_model_specific_params`, so the YAML must carry them). MASTER honours
-`use_gate: False` to skip its market-feature gate when running on the plain
-Alpha158 handler (which has no market columns):
+## Verification
 
 ```bash
-python train.py --config_file configs/f158_csi300/config_master.yaml --seed 2025
+python -m pytest tests -q
+python -m compileall -q src train.py search.py scripts
+python -m scripts.compare_baseline
+python -m scripts.verify_synthetic_pipeline
 ```
 
-Each market dir ships its own baseline configs (`configs/f158_csi800/config_master.yaml` for CSI 800); `--market` can still retarget any config.
+The final command generates a local synthetic Qlib provider, runs actual
+Alpha158/three-form training/checkpoint selection/Top-50 backtests, and verifies
+labels, cost, slippage quotes, lot sizes and suspension/limit-threshold filters.
+It is a software integration check, not evidence of TSIL's market performance.
 
-Outputs (training curves, `backtest_result_seed*.csv`, `backtest_report_*.txt`)
-are written under the `logdir` set in each config.
-
----
-
-## 6. Temporal predicates (`phi_type`)
-
-The predicate that builds `P = Φ Φᵀ` is chosen by the `phi_type` field in
-`model_config` and dispatched inside `WeightedMSELoss.forward`
-(`src/model_backbone_phitp.py`). `phi_type` is the **only** loss switch:
-
-| `phi_type`        | Loss                                    | Config family |
-|-------------------|-----------------------------------------|---------------|
-| `mse`             | plain per-sample MSE (no `P`)           | `*_ori.yaml`  |
-| `ones`            | weighted MSE with the `Φ_ones` control  | `*_phi.yaml`  |
-| a temporal key    | weighted MSE with that predicate's `P`  | `*_tp.yaml`   |
-
-**(a) The paper's six temporal predicates** — `src/temporal_predicates.py`
-(dispatched via `get_temporal_I_P`):
-
-| Paper predicate | `phi_type` key | Descriptor |
-|-----------------|----------------|------------|
-| Timestamp (Φ_ts)     | `phi_timestamp` / `phi_timestamp_dim` / `phi_timestamp_sl` | one-hot calendar features (needs the timestamp-aware dataset, see below) |
-| Market Cycle (Φ_cycle) | `phi_cycle` / `phi_cycle_onehot` | position within the batch's dominant FFT period |
-| Asset Phase (Φ_phase)  | `phi_phase`        | per-sample cyclical position over the sequence |
-| Momentum (Φ_mom)     | `phi_momentum`     | multi-horizon relative returns (k = 5/10/20) |
-| Volatility (Φ_vol)   | `phi_volatility`   | multi-window rolling std (w = 10/20/40) |
-| Distribution (Φ_dist)| `phi_return_dist`  | first four moments [mean, std, skew, kurt] |
-
-Legacy aliases `phi_period` / `phi_period_onehot` / `phi_period_per_sample` also
-route to the cycle/phase predicates.
-
-**(b) Extra exploratory predicates** — `src/custom_phi_constructors.py`
-(`phi_momentum`, `phi_volatility`, `phi_return_dist` are shared with table (a)):
-`phi_trend`, `phi_multiscale`, `phi_temporal`, `phi_feature_corr`,
-`phi_price_volume`, `phi_factor`, `phi_technical`, `phi_vol_return`,
-`phi_return_sim`, `phi_market_beta`, `phi_cross_corr`, `phi_lead_lag`,
-`phi_common_factor`, `phi_vol_sync`, `phi_tail_risk`, `phi_market_regime`,
-`phi_sector_cluster`. Run `python src/custom_phi_constructors.py` for a self-test
-of all of them, or `python src/temporal_predicates.py` for the six paper predicates.
-
-**Dataset note (timestamp predicate).** Only `phi_timestamp*` needs calendar
-features; the dataset (`src/dataset_ori_onehot.py`) builds them **only** when the
-`phi_type` it receives starts with `phi_timestamp` (encoding controlled by its
-`embed` / `ts_onehot` kwargs). For every other `phi_type` no timestamp features are
-built or carried. `train.py` / `search.py` pass `phi_type` through to the dataset
-automatically.
-
-The shipped `*_phi.yaml` configs use `phi_type: ones` (the `Φ_ones` control) and
-`*_tp.yaml` use `phi_type: phi_momentum`; **to reproduce the paper's per-backbone
-temporal-predicate results, start from `*_tp.yaml` or pass `--phi_type` with a key
-from table (a)**.
-
-### Sweeping predicates across backbones
-
-To compare predicates across backbones, drive `train.py` over the keys you want
-(`--phi_type`), or use `search.py --phi_types <k1> <k2> …` to also tune
-hyper-parameters per predicate.
-
----
-
-## How to add a predicate
-
-A predicate is a function that maps a mini-batch to a per-sample descriptor
-`φ ∈ ℝ^{B×d}`; the loss then couples samples through `P = φ̃ φ̃ᵀ`. Adding one is two
-small steps.
-
-**Contract.** Implement a constructor with this exact signature in
-`src/custom_phi_constructors.py`:
-
-```python
-def get_<name>_I_P(batch_x, device=None, **kwargs):
-    # batch_x: [batch_size, seq_len, feature_dim]
-    # returns (I, P), both [batch_size, batch_size] tensors
-```
-
-Requirements:
-
-- Compute a per-sample descriptor `phi` of shape `[batch_size, d]` (any `d ≥ 1`).
-- L2-normalize over the whole batch and form `P`: `phi = phi / (torch.linalg.norm(phi) + 1e-8)`, `P = phi @ phi.T`.
-- Return the identity for the pointwise term: `I = torch.eye(batch_size, device=device)`.
-- Guard against NaN/Inf with `torch.nan_to_num(...)` — features can contain gaps.
-
-**Wiring (two edits).**
-
-1. Register the key in `get_custom_I_P`'s `phi_type_map` (same file):
-   `'phi_<name>': get_<name>_I_P`.
-2. Add `'phi_<name>'` to the `_CUSTOM_PHI_TYPES` set in
-   `src/model_backbone_phitp.py`. The dispatch branch
-   (`phi_type in _CUSTOM_PHI_TYPES`) in `WeightedMSELoss.forward` then routes to
-   it automatically.
-
-After that, `--phi_type phi_<name>` works in both `train.py` and `search.py`.
-
-**Example** — a predicate that groups stocks by recent trading-volume trend
-(sign of the last-vs-first volume change over the window):
-
-```python
-def get_volume_trend_I_P(batch_x, device=None, **kwargs):
-    batch_size = batch_x.shape[0]
-    if device is None:
-        device = batch_x.device
-    I = torch.eye(batch_size, device=device)
-    # use the cross-feature mean as a stand-in for the traded volume series
-    series = batch_x.mean(dim=2)                       # [B, seq_len]
-    trend = (series[:, -1] - series[:, 0]).unsqueeze(1)  # [B, 1]
-    phi = torch.nan_to_num(trend, nan=0.0)
-    phi = phi / (torch.linalg.norm(phi) + 1e-8)
-    P = phi @ phi.T
-    return I, P
-```
-
-Register `'phi_volume_trend': get_volume_trend_I_P` in `phi_type_map`, add
-`'phi_volume_trend'` to `_CUSTOM_PHI_TYPES`, then run
-`python train.py --config_file <cfg> --phi_type phi_volume_trend`.
-
----
-
-## 7. Backtest protocol
-
-After prediction, signals are evaluated with a daily-rebalanced **Top-K Dropout**
-strategy (`basktesting.py` + Qlib's `PortAnaRecord`):
-
-- `topk = 50`, `n_drop = 5`, daily rebalancing.
-- A-share frictions: 0.05% buy commission, 0.15% sell stamp duty, 0.01% slippage,
-  100-share lots; suspended / limit-hit stocks excluded (`limit_threshold: 0.095`).
-- Backtest window: 2024-01-01 → 2025-08-31 (the test segment).
-
-Reported metrics:
-
-- **Ranking quality:** IC, ICIR, RankIC, RankICIR.
-- **Portfolio:** AR (annualized return) and IR (information ratio), with and without
-  transaction cost, plus max drawdown.
-
-The AR/IR/MMD figures in `backtest_report_*.txt` are read from Qlib's
-`PortAnaRecord` (excess return over the benchmark). `basktesting.py` also computes
-a self-contained, commission-aware Top-K-Dropout return series
-(`calculate_portfolio_metrics`, annualized with 252) saved to
-`backtest_result_seed*.csv`; use one source consistently when comparing runs.
-
----
-
-## 8. Reproducing the paper comparisons
-
-For each backbone and market, the paper compares two modeling forms:
-
-1. **Original** — `--phi_type mse` (plain MSE), i.e. the `*_ori.yaml` configs.
-2. **TSIL-Enhanced** — `--phi_type <temporal key>` (invariant penalty), i.e. the
-   `*_tp.yaml` configs. `*_phi.yaml` (`phi_type: ones`) is the `Φ_ones` ablation.
-
-Run the same backbone/market with each `phi_type` and compare the
-`backtest_report_*.txt` outputs.
-
-> The feature-concatenated variant reported in the paper (predicate descriptor
-> fed as an extra input feature rather than as a loss term) is **not** part of
-> this release: its `PhiFeatureModel` / `phi_feature_extractor` modules are not
-> included here. This repo covers the Original and loss-based TSIL forms.
-
-### Reproduction notes (read before a full run)
-
-The shipped configs are tuned per backbone, but a few defaults differ from the
-paper's full protocol. None block training; adjust them to match the paper:
-
-- **Predicate selection.** `*_phi.yaml` use `phi_type: ones` (the `Φ_ones`
-  control) and `*_tp.yaml` use `phi_type: phi_momentum`. For the paper's
-  per-backbone best predicate, start from `*_tp.yaml` or pass `--phi_type` with
-  the corresponding key in §6(a) (e.g. `phi_momentum` for GAT, `phi_volatility`
-  for LSTM on CSI 300).
-- **CSI 300 label horizon.** Some CSI 300 `*_ori.yaml` use a 3-day label
-  (`Ref($close, -4)`); set them to the 2-day label `Ref($close, -2)` to match
-  the `*_phi.yaml` and the paper.
-- **Hyper-parameters.** `train.py` honours each config's own hyper-parameters
-  (no hidden overrides); pass `--lr/--d_model/--e_layers/--batch_size` to vary
-  them, or use `search.py` to tune them by validation IC.
-- **Seeds.** `train.py` runs the seed set `42 2022 2023 2024 2025` by default;
-  the paper reports mean ± std over multiple seeds. Pass `--seed` to change them.
-- **Model selection.** Early stopping in `QniverseModel.fit` tracks validation
-  **IC** (Pearson) with the patience set by `early_stop` in each config; this is
-  also the metric `search.py` selects on. The paper describes selection on
-  validation RankICIR; change the `valid_metrics["IC"]` criterion in `fit()` to
-  match that exactly.
-- **MASTER input.** `src/models/master.py` reads market features at input indices
-  `[158:221]` (Qlib `Alpha158` + 63 market columns) **when `use_gate: True`**. The
-  shipped baseline config feeds 158-feature `Alpha158` with `use_gate: False`, and
-  the model now honours that flag by skipping the market-feature gate (all 158
-  features pass straight through). To enable the gate, provide the 221-feature
-  market-augmented input and set `use_gate: True`.
+Legacy `src/custom_phi_constructors.py`, `src/timefeatures.py` and
+`basktesting.py` remain available as historical code. The repaired entry points
+do not use them for paper predicates, timestamp encoding or portfolio returns.
+Old `tau_hat_init`, legacy predicate aliases and checkpoints containing
+trainable `alpha` are not interchangeable with this repaired method: retrain.
 
 ## License
 
-Released under the GNU General Public License v3.0 (see `LICENSE`).
+GNU General Public License v3.0; see `LICENSE`.

@@ -149,7 +149,6 @@ class StockMixer(nn.Module):
         - market_num: market hidden dimension
         - scale_factor: scale factor
         - dropout: dropout rate
-        - tau_hat_init: initial tau value
     """
     
     def __init__(self, configs):
@@ -163,10 +162,6 @@ class StockMixer(nn.Module):
         self.scale_factor = getattr(configs, 'scale_factor', 3)  # scale factor
         self.dropout = getattr(configs, 'dropout', 0.1)
         
-        # alpha parameter used by WeightedMSELoss
-        self.alpha = torch.nn.Parameter(
-            torch.tensor(float(getattr(configs, 'tau_hat_init', 0.0)), dtype=torch.float32)
-        )
         
         # input dropout
         self.input_drop = nn.Dropout(self.dropout)

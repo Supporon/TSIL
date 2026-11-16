@@ -16,9 +16,6 @@ class GAT(nn.Module):
         self.d_ff = configs.d_ff
         self.dropout = configs.dropout
         self.num_layers = configs.e_layers
-        self.alpha = torch.nn.Parameter(
-            torch.tensor(float(configs.tau_hat_init), dtype=torch.float32)
-        )
         if self.base_model == "GRU":
             self.rnn = nn.GRU(
                 input_size=self.input_size,
@@ -44,7 +41,6 @@ class GAT(nn.Module):
         self.fc = nn.Linear(self.hidden_size, self.hidden_size)
         self.leaky_relu = nn.LeakyReLU()
         self.softmax = nn.Softmax(dim=1)
-        self.alpha = torch.nn.Parameter(torch.tensor(configs.tau_hat_init))  # learnable tau_hat parameter
 
         self.projection = nn.Sequential(
                 nn.Linear(self.hidden_size, self.d_ff, bias=True),

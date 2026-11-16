@@ -27,9 +27,6 @@ class LSTM(nn.Module):
         self.use_attn = configs.use_attn
         self.noise_level = configs.noise_level
         self.dropout = configs.dropout
-        self.alpha = torch.nn.Parameter(
-            torch.tensor(float(configs.tau_hat_init), dtype=torch.float32)
-        )
 
         self.input_drop = nn.Dropout(self.dropout)
 

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TSIL 原始论文一致性修复报告</title>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+      background: #f8f9fb;
+      color: #1a1d23;
+      line-height: 1.6;
+      padding: 2rem 1.5rem;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    pre {
+      background: #1e2129;
+      color: #e4e7ec;
+      padding: 0.6rem 1rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+    code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }
+    p code, li code { background: #eff1f5; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
+    kbd {
+      display: inline-block; padding: 0.15rem 0.5rem; font-size: 0.8em;
+      font-family: 'JetBrains Mono', monospace; background: #eff1f5;
+      border: 1px solid #d0d4dc; border-radius: 4px; box-shadow: 0 1px 0 #c4c8d0;
+    }
+    var { font-style: normal; font-weight: 600; color: #2563eb; }
+    details {
+      background: #fff; border: 1px solid #e2e5ea; border-radius: 8px;
+      margin-bottom: 0.75rem; overflow: hidden;
+    }
+    details summary {
+      cursor: pointer; padding: 0.85rem 1.1rem; font-weight: 600; font-size: 0.9rem;
+      background: #fafbfc; border-bottom: 1px solid #e2e5ea; transition: background 0.15s;
+    }
+    details summary:hover { background: #f0f2f5; }
+    details[open] summary { border-bottom-color: #e2e5ea; }
+    details > ul, details > ol { padding: 0.75rem 1.25rem 0.75rem 2rem; margin: 0; font-size: 0.9rem; }
+    details > ul li, details > ol li { margin-bottom: 0.35rem; }
+    .badge {
+      display: inline-block; padding: 3px 12px; border-radius: 20px;
+      font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; color: #fff;
+    }
+    .badge-warning { background: #f59e0b; }
+    .badge-success { background: #16a34a; }
+    .badge-danger  { background: #dc2626; }
+    .badge-info    { background: #2563eb; }
+    .badge-neutral { background: #6b7280; }
+    p.stats { font-size: 0.8rem; color: #6b7280; margin: 0.25rem 0 0.75rem; letter-spacing: 0.02em; }
+    table.impact {
+      width: 100%; border-collapse: collapse; font-size: 0.88rem;
+      background: #fff; border-radius: 8px; overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    table.impact th {
+      background: #f4f5f7; padding: 10px 14px; text-align: left;
+      font-weight: 600; border-bottom: 2px solid #dce0e6;
+    }
+    table.impact td { padding: 10px 14px; border-bottom: 1px solid #edf0f4; vertical-align: top; }
+    table.impact tr:last-child td { border-bottom: none; }
+    aside.warn {
+      margin: 1.75rem 0; padding: 1.1rem 1.25rem;
+      border-left: 4px solid #f59e0b; background: #fffbeb; border-radius: 8px; font-size: 0.9rem;
+    }
+    aside.warn h4 { margin: 0 0 0.5rem; color: #92400e; }
+    aside.warn ul { margin: 0; padding-left: 1.25rem; }
+    aside.warn ul li { margin-bottom: 0.35rem; }
+    aside.note {
+      margin: 1.75rem 0; padding: 1.1rem 1.25rem;
+      border-left: 4px solid #2563eb; background: #eff6ff; border-radius: 8px; font-size: 0.9rem;
+    }
+    aside.note h3 { margin: 0 0 0.5rem; color: #1e40af; }
+    aside.note ul { margin: 0; padding-left: 1.25rem; }
+    aside.note ul li { margin-bottom: 0.35rem; }
+    @media print {
+      body { color: #000; background: #fff; }
+      details { border: 1px solid #ccc; break-inside: avoid; }
+      details summary { background: #f5f5f5; border-bottom: 1px solid #ccc; }
+      details[open] { break-inside: avoid; }
+      .badge { border: 1px solid #666; color: #000 !important; background: #eee !important; }
+      kbd { border-color: #999; box-shadow: none; }
+      pre { background: #f5f5f5; color: #000; border: 1px solid #ccc; }
+      aside.warn { border-left-color: #f59e0b; background: #fffbe6; }
+      aside.warn h4 { color: #92400e; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #12141a; color: #e4e7ec; }
+      details { background: #1a1d26; border-color: #2c2f3a; }
+      details summary { background: #1e2129; border-bottom-color: #2c2f3a; color: #e4e7ec; }
+      details summary:hover { background: #252833; }
+      p code, li code { background: #252833; }
+      kbd { background: #252833; border-color: #3a3e4a; box-shadow: 0 1px 0 #3a3e4a; }
+      table.impact { background: #1a1d26; }
+      table.impact th { background: #1e2129; border-bottom-color: #2c2f3a; }
+      table.impact td { border-bottom-color: #2c2f3a; }
+      p.stats { color: #9ca3af; }
+      aside.warn { background: #2a2416; border-left-color: #f59e0b; }
+      aside.warn h4 { color: #fbbf24; }
+      aside.note { background: #1a2332; border-left-color: #3b82f6; }
+      aside.note h3 { color: #93c5fd; }
+      .badge-warning { background: #d97706; }
+    }
+  </style></head>
+<body>
+<section>
+<header><span class="badge badge-warning">原始论文方法修复 · 2026-10-26</span>
+<p class="stats">代码、配置、测试与运行说明：47 个文件 · +2299/−1967 行 · 1 个本地修复提交</p>
+<h2>TSIL：从论文公式到实际训练、选择与交易</h2>
+<p>本次修复以原始 LaTeX 定义为准，重新实现六类描述符和固定权重损失，并修复数据因果性、三形态对照、选择与回测入口。基线 <kbd>5b5ab68</kbd>；已确认窗口及批量约定随代码保存。<strong>Out of scope:</strong> 本次没有重算真实市场论文表格或发布 GitHub main。</p>
+<p><a href="PAPER_ALIGNMENT_REPORT_ZH.md">完整中文技术报告</a> · <a href="verification/RESULTS.md">测试结论与命令</a> · <a href="verification/before_after.json">修改前后数值证据</a></p></header>
+<section><h2>关键行为对照</h2><table class="impact"><thead><tr><th>项目</th><th>修改前</th><th>修改后</th></tr></thead><tbody><tr><td>训练目标</td><td>缩放 MSE + 可训练混合系数</td><td>完整 MSE + 固定 beta 的残差矩</td></tr><tr><td>时间信息</td><td>随机 batch 行序与标准化因子统计</td><td>原始价格/已实现收益与交易日历</td></tr><tr><td>历史与因果性</td><td>可跨股票，未来标签删除影响关系输入</td><td>连续历史、完整因果截面，forward 后筛监督</td></tr><tr><td>实验对照</td><td>Feature 路径不完整，seed/选择记录不足</td><td>三形态、真实 seed、阶段式验证选择与 manifest</td></tr><tr><td>回测收益</td><td>辅助标签均值路径与 Qlib 结果混用</td><td>实际成交收益，明确绝对/超额及成本口径</td></tr><tr><td>验证结论</td><td>代码不足以支持原方法描述</td><td>数学/软件链路可核验，真实市场表格仍待重跑</td></tr></tbody></table></section><section><h2>按文件展开修改依据</h2><details><summary><var>src/tsil_loss.py</var> · 完整 MSE 加固定残差矩惩罚</summary><p>预测与原始标签相减得到 e；各谓词独立 Frobenius 归一化；直接计算 Phiᵀe/B 后加权平方，不构造 B×B Gram。beta 是验证集选定的常量。手算反例：旧值 2.375 → 新值 3.0625，与论文一致。</p></details><details><summary><var>src/temporal_predicates.py</var> · 恢复六个原始描述符</summary><p>Cycle 在市场收益的时间轴 FFT，使用全局交易日的 sin/cos；Phase 使用个股收益 FFT 和 modulo。Momentum 为对数价格比；Volatility、Distribution 使用原始收益总体矩。Timestamp 为固定 OneHot。</p></details><details><summary><var>src/predicate_data.py</var> · 独立、因果的原始历史缓存</summary><p>从 Qlib close 读取至少 41 个价格点支持 40 日收益窗口；市场均值按历史成分股逐日计算。缺失/非正价格不被补造成有效原始行情。追加未来行情不改变已有描述符。</p></details><details><summary><var>src/dataset_ori_onehot.py</var> · 完整同日截面和真实历史</summary><p>先保留 _infer 的完整特征时间线，筛选连续 20 个交易日的因果输入，再构造批次。禁止跨股票/跨成员缺口拼窗。未来标签只在 forward 后决定损失和指标的监督子集。split 末端的跨界标签被剔除。</p></details><details><summary><var>src/model_backbone_phitp.py</var> · 三形态、日 IC、固定权重</summary><p>Original 使用 MSE；Feature 将同一描述符沿所有时间步拼接；TSIL 仅训练损失读取描述符。GAT/MASTER/LSR-IGRU 逐日独立 forward。验证按日 IC 选择、patience=20，默认关闭参数平均；推理按同步 ms/sample 计时。</p></details><details><summary><var>src/models/*.py</var> · 九骨干与 Feature 兼容</summary><p>移除九骨干中只服务旧损失的 alpha 参数。MASTER use_gate=False 时保留所有输入列，使追加 Feature 不会被截掉；其余预测结构不增加 TSIL 模块。旧 checkpoint 需重新训练。</p></details><details><summary><var>search.py / src/run_utils.py</var> · 选择顺序、真 seed 与固定网络</summary><p>先用 seed2025 Original 选网络；固定后逐 seed/predicate 选 alpha；ones 不参与主表谓词选择。关系模型搜索 2/4/8 完整日，其他模型搜索 256/512/1024 样本。Feature 复用 network manifest；搜索不评估 test。</p></details><details><summary><var>train.py / configs/</var> · 只报告真实交易收益</summary><p>18 配置修复原始次日标签、CSZScoreNorm 和交易参数。选定 checkpoint 直接评估 test。正式回测使用 Qlib 执行器，分开策略绝对收益与超额收益，保存 daily return/cost/bench 和实际持仓。</p></details><details><summary><var>tests/ / scripts/ / requirements.txt</var> · 可重复证据与可运行环境</summary><p>独立数值 oracle、真实 GAT 未来缺失回归、跨模板九骨干、Feature、选择协议及端到端合成 Qlib 运行。固定 Joblib 1.4.2，解决已复现的 Qlib ParallelExt 接口不兼容。完整测试结论以 verification/RESULTS.md 为准。</p></details></section>
+<aside class="note"><h3>已接受的约定与验证边界</h3><ul>
+<li><strong>用户已确认窗口：</strong>Momentum 5/10/20；Volatility 10/20/40；Cycle、Phase、Distribution 20 日；Alpha158 输入 T=20。</li>
+<li><strong>用户已确认关系批量：</strong>GAT、MASTER、LSR-IGRU 使用 2/4/8 个完整交易日，不能把它们误标成普通 stock batch_size。</li>
+<li><strong>已完成合成 Qlib 验通：</strong>56 股、120 日、三形态各 504 个测试预测、10 日 Top-50/Drop-5 实际回测，含原始标签、滑点、成本、整手与停牌/阈值检查。</li>
+<li><strong>不是历史业绩复现：</strong>配置目录没有真实 CSI300/CSI800 数据；未运行全量九模型、五种子的市场实验，未证明旧表格或论文优势结论。</li>
+<li><strong>交易限制：</strong>信号下一步执行；0.095 是 Qlib 统一涨跌停近似，未验证板块/ST 的逐日规则；整手换算要求有效 factor。</li>
+<li><strong>口径与环境：</strong>weekday/month、等权市场收益、跨 seed 验证均值、252 日算术年化均明确披露；实测 PyTorch 2.3.1 CPU / Qlib 0.9.6，非原文旧环境或 GPU 延迟复现。</li>
+</ul></aside></section>
+</body>
+</html>

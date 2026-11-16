@@ -1,225 +1,203 @@
-"""Hyper-parameter search entry point for TSIL (Optuna / TPE).
+"""Paper protocol: freeze the network, then select fixed beta by validation daily IC.
 
-Searches lr x layers x d_model x batch_size x tau for one or more backbones and
-predicates, selecting the best configuration **by validation IC** (read from
-`model.fit`'s `metrics['best_score']`, i.e. the IC of the best epoch on the
-validation segment). Test-set metrics are never used to pick hyper-parameters,
-avoiding leakage; they are reported only for the chosen configuration.
-
-Usage
------
-    python search.py --config_file configs/f158_csi300/config_lstm.yaml \
-        --models LSTM GRU --phi_types phi_momentum --market csi300 --n_trials 50
-
-Requires `optuna` (see requirements.txt).
+No candidate prepares or evaluates the test split. The saved manifest identifies
+the exact checkpoints/configurations eligible for subsequent test evaluation.
 """
 import argparse
 import copy
 import json
-import os
-import sys
+import math
 from pathlib import Path
 
-os.chdir(sys.path[0])
-
-import warnings
-warnings.filterwarnings("ignore")
-
 import numpy as np
-import pandas as pd
-import qlib
 import ruamel.yaml as YAML
-from qlib.utils import init_instance_by_config
-from qlib.workflow import R
 
-try:
-    import optuna
-    from optuna.samplers import TPESampler
-    from optuna.pruners import MedianPruner
-    OPTUNA_AVAILABLE = True
-except ImportError:
-    OPTUNA_AVAILABLE = False
-
-from src.run_utils import (
-    DEFAULT_SEARCH_SPACE, TAU_VALUES, ALL_MODELS,
-    inject_model_specific_params, set_market,
-)
+from src.run_utils import (DEFAULT_SEARCH_SPACE, DEFAULT_SEEDS, PENALTY_ALPHA_VALUES,
+                           ALL_MODELS, RELATIONAL_MODELS, configure_run, inject_model_specific_params, set_market)
+from src.temporal_predicates import TEMPORAL_PHI_TYPES, selected_predicates
 
 
-def _suggest(trial, search_space):
-    """Sample one hyper-parameter point from the search space."""
-    hp = {}
-    for name, spec in search_space.items():
+def network_search_space(model_type, space=None):
+    space = copy.deepcopy(space or DEFAULT_SEARCH_SPACE)
+    if model_type in RELATIONAL_MODELS:
+        space.pop("bs", None)
+        space.setdefault("days_per_batch", {"type": "categorical", "choices": [2, 4, 8]})
+    return space
+
+
+def _suggest(trial, space):
+    point = {}
+    for key, spec in space.items():
         if spec["type"] == "categorical":
-            hp[name] = trial.suggest_categorical(name, spec["choices"])
+            point[key] = trial.suggest_categorical(key, spec["choices"])
         elif spec["type"] == "int":
-            hp[name] = trial.suggest_int(name, spec["low"], spec["high"])
-        elif spec["type"] == "float":
-            hp[name] = trial.suggest_float(name, spec["low"], spec["high"],
-                                           log=spec.get("log", False))
-    return hp
+            point[key] = trial.suggest_int(key, spec["low"], spec["high"])
+        else:
+            point[key] = trial.suggest_float(key, spec["low"], spec["high"], log=spec.get("log", False))
+    return point
 
 
-def _apply(config, hp, model_type, phi_type, tau, market):
-    """Build a concrete config for one trial."""
-    config = copy.deepcopy(config)
+def _apply(base, hp, model_type, phi_type, alpha, market):
+    config = copy.deepcopy(base)
+    if model_type != base["task"]["model"]["kwargs"]["model_type"]:
+        # Architecture-specific fields come from that backbone's released YAML.
+        path = Path(__file__).parent / "configs" / f"f158_{market}" / f"config_{model_type.lower()}.yaml"
+        target = YAML.YAML(typ="safe").load(path.read_text(encoding="utf-8"))["model_config"]
+        for key in ("seq_len", "enc_in", "pred_len", "c_out", "predicate_config", "injection_mode"):
+            if key in config["model_config"]:
+                target[key] = config["model_config"][key]
+        config["model_config"] = target
+    mc = config["model_config"]
+    trainer = config["task"]["model"]["kwargs"]
+    trainer["model_type"] = model_type
+    trainer["model_config"] = mc
     if "lr" in hp:
-        config["task"]["model"]["kwargs"]["lr"] = hp["lr"]
-        config["model_config"]["lr"] = hp["lr"]
+        trainer["lr"] = hp["lr"]
+        mc["lr"] = hp["lr"]
     if "layers" in hp:
-        config["model_config"]["e_layers"] = hp["layers"]
+        mc["e_layers"] = hp["layers"]
     if "d_model" in hp:
-        config["model_config"]["d_model"] = hp["d_model"]
-        config["model_config"]["d_ff"] = hp["d_model"]
+        mc["d_model"] = hp["d_model"]
+        mc["d_ff"] = hp["d_model"]
     if "bs" in hp:
+        if model_type in RELATIONAL_MODELS:
+            raise ValueError("relation backbones search days_per_batch, not stock batch_size")
         config["task"]["dataset"]["kwargs"]["batch_size"] = hp["bs"]
-
-    config["task"]["model"]["kwargs"]["model_type"] = model_type
-    config["model_config"]["phi_type"] = phi_type
-    config["model_config"]["tau_hat_init"] = tau
+    if "days_per_batch" in hp:
+        config["task"]["dataset"]["kwargs"]["days_per_batch"] = hp["days_per_batch"]
+    mc["phi_type"], mc["penalty_alpha"] = phi_type, float(alpha)
+    mc["injection_mode"] = "original" if phi_type == "mse" else base["model_config"].get("injection_mode", "tsil")
     inject_model_specific_params(config, model_type)
     set_market(config, market)
+    trainer["eval_test"] = False
+    trainer["plot_training"] = False
     return config
 
 
 def _train_one(config, model_type):
-    """Train one config; return validation IC (best epoch) for selection.
+    import qlib
+    from qlib.utils import init_instance_by_config
+    qlib.init(provider_uri=config["qlib_init"]["provider_uri"], region=config["qlib_init"]["region"], kernels=1)
+    dataset = init_instance_by_config(config["task"]["dataset"])
+    model = init_instance_by_config(config["task"]["model"])
+    _, metrics = model.fit(dataset, evaluate_test=False)
+    return float(metrics["best_score"])
 
-    Selection metric is the validation IC, read from fit()'s best_score, so the
-    test segment never influences hyper-parameter choice.
+
+def _write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str, allow_nan=False), encoding="utf-8")
+
+
+def run_paper_selection(base_config, models, phi_types, alpha_values, market, output_dir,
+                        seeds=DEFAULT_SEEDS, network_candidates=None, train_fn=None,
+                        n_trials=50, search_space=None, frozen_network_manifest=None):
+    """Network selection uses seed 2025; all later stages freeze that network.
+
+    A common main-table predicate is selected by the mean of the seed-wise
+    selected validation ICs. This explicit aggregation convention fills an
+    underspecified part of the manuscript; ties retain the first candidate.
     """
-    qlib.init(provider_uri=config["qlib_init"]["provider_uri"],
-              region=config["qlib_init"]["region"])
-    exp_path = os.path.join(config["logdir"], "experiments")
-    os.makedirs(exp_path, exist_ok=True)
-    R.set_uri(exp_path)
+    train_fn = train_fn or _train_one
+    phi_types = list(phi_types)
+    for name in phi_types:
+        selected_predicates(name)
+    if not seeds or not alpha_values or not phi_types:
+        raise ValueError("seeds, alpha_values and phi_types must be nonempty")
+    output = Path(output_dir).resolve()
+    if frozen_network_manifest is not None and frozen_network_manifest["market"] != market:
+        raise ValueError("frozen network selection must come from the same market")
+    manifest = {"protocol": "original-paper", "market": market, "network_seed": 2025, "test_evaluated": False,
+                "predicate_selection_rule": "mean validation daily IC across seeds; exclude ones; first wins ties",
+                "models": {}}
 
-    with R.start(experiment_name=f"{model_type}_search",
-                 recorder_name=f"trial"):
-        # phi_type lives in model_config; pass it to the dataset so it only
-        # extracts timestamp features for the timestamp predicate.
-        config["task"]["dataset"]["kwargs"]["phi_type"] = config["model_config"].get("phi_type")
-        dataset = init_instance_by_config(config["task"]["dataset"])
-        model = init_instance_by_config(config["task"]["model"])
-        _, metrics = model.fit(dataset)
-    # best_score is the validation IC at the best epoch (see QniverseModel.fit).
-    return float(metrics.get("best_score", float("nan")))
+    def run(config, seed, folder):
+        config["logdir"] = str(folder)
+        config = configure_run(config, seed)
+        config_path = Path(config["logdir"]) / "config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with config_path.open("w", encoding="utf-8") as stream:
+            YAML.YAML().dump(config, stream)
+        score = float(train_fn(config, config["task"]["model"]["kwargs"]["model_type"]))
+        if not math.isfinite(score):
+            raise ValueError(f"selection requires finite validation IC: {config_path}")
+        return {"valid_ic": score, "seed": int(seed), "config_path": str(config_path),
+                "checkpoint": str(config_path.parent / "model.bin")}
 
+    for model_type in models:
+        model_dir = output / model_type
+        network_rows = []
 
-def run_search(base_config, models, phi_types, tau_values, market,
-               output_dir, search_space, n_trials, seed, early_stop):
-    if not OPTUNA_AVAILABLE:
-        raise ImportError("optuna is required for search.py: pip install optuna plotly")
+        def evaluate_network(hp):
+            cfg = _apply(base_config, hp, model_type, "mse", 0., market)
+            row = run(cfg, 2025, model_dir / "network" / str(len(network_rows)))
+            row["hyperparameters"] = dict(hp)
+            network_rows.append(row)
+            _write_json(model_dir / "network_candidates.json", network_rows)
+            return row["valid_ic"]
 
-    os.makedirs(output_dir, exist_ok=True)
-    all_rows = []
-    combos = [(m, p, t) for m in models for p in phi_types for t in tau_values]
-    print(f"#combinations={len(combos)} (models x phi_types x tau); "
-          f"{n_trials} trials each")
-
-    for ci, (model_type, phi_type, tau) in enumerate(combos, 1):
-        combo_dir = os.path.join(output_dir, f"{model_type.lower()}_{phi_type}_tau{tau}")
-        os.makedirs(combo_dir, exist_ok=True)
-        history = []
-
-        def objective(trial):
-            hp = _suggest(trial, search_space)
-            config = _apply(base_config, hp, model_type, phi_type, tau, market)
-            config["logdir"] = combo_dir
-            config["task"]["model"]["kwargs"]["logdir"] = combo_dir
-            config["model_config"]["ind"] = trial.number
-            try:
-                valid_ic = _train_one(config, model_type)
-            except Exception as e:
-                print(f"  trial {trial.number} failed: {e}")
-                return float("-inf")
-            history.append({"trial": trial.number, **hp, "valid_ic": valid_ic})
-            pd.DataFrame(history).to_csv(os.path.join(combo_dir, "trial_history.csv"),
-                                         index=False)
-            return valid_ic
-
-        print(f"\n[{ci}/{len(combos)}] model={model_type} phi={phi_type} tau={tau}")
-        study = optuna.create_study(
-            direction="maximize",
-            sampler=TPESampler(seed=seed, multivariate=True),
-            pruner=MedianPruner(n_startup_trials=5),
-            study_name=f"{model_type}_{phi_type}_tau{tau}",
-        )
-
-        # Early stop: stop the study once no improvement for `early_stop` trials.
-        state = {"best": float("-inf"), "stale": 0}
-
-        def _es(study, trial):
-            v = trial.value if trial.value is not None else float("-inf")
-            if v > state["best"]:
-                state["best"], state["stale"] = v, 0
-            else:
-                state["stale"] += 1
-            if state["stale"] >= early_stop:
-                study.stop()
-
-        study.optimize(objective, n_trials=n_trials, callbacks=[_es],
-                       show_progress_bar=True)
-
-        best = study.best_trial
-        row = {"model_type": model_type, "phi_type": phi_type, "tau": tau,
-               "best_valid_ic": study.best_value, **best.params}
-        all_rows.append(row)
-        with open(os.path.join(combo_dir, "optimization_report.txt"), "w") as f:
-            f.write(f"model={model_type} phi={phi_type} tau={tau}\n")
-            f.write(f"best valid IC: {study.best_value:.6f}\n")
-            f.write(f"best params: {best.params}\n")
-        _save_visualizations(study, combo_dir)
-
-    results = pd.DataFrame(all_rows)
-    results.to_csv(os.path.join(output_dir, "all_best_results.csv"), index=False)
-    print("\nSearch complete. Best per combination:")
-    print(results.to_string(index=False))
-    return results
-
-
-def _save_visualizations(study, out_dir):
-    """Best-effort Optuna plots; skip silently if plotly is unavailable."""
-    try:
-        from optuna.visualization import plot_optimization_history, plot_param_importances
-        vdir = os.path.join(out_dir, "visualizations")
-        os.makedirs(vdir, exist_ok=True)
-        plot_optimization_history(study).write_html(os.path.join(vdir, "history.html"))
-        plot_param_importances(study).write_html(os.path.join(vdir, "param_importances.html"))
-    except Exception as e:
-        print(f"  (visualization skipped: {e})")
+        if frozen_network_manifest is not None:
+            network_rows.append(copy.deepcopy(frozen_network_manifest["models"][model_type]["network_selection"]))
+        elif network_candidates is not None:
+            for hp in network_candidates:
+                evaluate_network(hp)
+        else:
+            import optuna
+            study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=2025))
+            study.optimize(lambda trial: evaluate_network(_suggest(trial, network_search_space(model_type, search_space))),
+                           n_trials=n_trials)
+        if not network_rows:
+            raise ValueError("network search produced no finite candidates")
+        network = max(network_rows, key=lambda row: row["valid_ic"])
+        frozen_hp = network["hyperparameters"]
+        candidates, per_predicate = [], {}
+        for name in phi_types:
+            selected = []
+            # Feature and Original have no beta penalty to tune.
+            grid = alpha_values if base_config["model_config"].get("injection_mode", "tsil") == "tsil" and name != "mse" else [0.]
+            for seed in seeds:
+                rows = []
+                for alpha in grid:
+                    cfg = _apply(base_config, frozen_hp, model_type, name, alpha, market)
+                    row = run(cfg, seed, model_dir / "predicates" / name / f"alpha{alpha}")
+                    row.update(phi_type=name, penalty_alpha=float(alpha), beta=float(1 / (1 + np.exp(-alpha))))
+                    rows.append(row)
+                    candidates.append(row)
+                    _write_json(model_dir / "predicate_candidates.json", candidates)
+                selected.append(max(rows, key=lambda row: row["valid_ic"]))
+            per_predicate[name] = selected
+        domain = [name for name in phi_types if name in TEMPORAL_PHI_TYPES]
+        best_name = max(domain, key=lambda name: np.mean([r["valid_ic"] for r in per_predicate[name]])) if domain else None
+        manifest["models"][model_type] = {
+            "batch_unit": "complete trading days" if model_type in RELATIONAL_MODELS else "stock-date samples",
+            "network_hyperparameters": frozen_hp, "network_selection": network,
+            "selected_by_predicate": per_predicate, "selected_predicate": best_name,
+            "selected_runs": per_predicate[best_name] if best_name else [],
+        }
+        _write_json(output / "selection_manifest.json", manifest)
+    return manifest
 
 
 def build_argparser():
-    p = argparse.ArgumentParser(allow_abbrev=False,
-                                description="TSIL hyper-parameter search (Optuna/TPE)")
-    p.add_argument("--config_file", type=str, required=True)
-    p.add_argument("--models", type=str, nargs="+", default=["LSTM"], choices=ALL_MODELS)
-    p.add_argument("--phi_types", type=str, nargs="+", default=["mse"])
-    p.add_argument("--tau_values", type=float, nargs="+", default=TAU_VALUES)
-    p.add_argument("--market", type=str, default="csi300", choices=["csi300", "csi500", "csi800"])
-    p.add_argument("--n_trials", type=int, default=50)
-    p.add_argument("--early_stop", type=int, default=10)
-    p.add_argument("--seed", type=int, default=2025)
-    p.add_argument("--output_dir", type=str, default="output_search")
-    return p
+    parser = argparse.ArgumentParser(allow_abbrev=False, description=__doc__)
+    parser.add_argument("--config_file", required=True)
+    parser.add_argument("--models", nargs="+", choices=ALL_MODELS, default=["LSTM"])
+    parser.add_argument("--phi_types", nargs="+", default=["mse", "ones", *sorted(TEMPORAL_PHI_TYPES)])
+    parser.add_argument("--alpha_values", nargs="+", type=float, default=PENALTY_ALPHA_VALUES)
+    parser.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
+    parser.add_argument("--market", choices=["csi300", "csi800"], default="csi300")
+    parser.add_argument("--injection_mode", choices=["tsil", "feature"], default="tsil")
+    parser.add_argument("--n_trials", type=int, default=50)
+    parser.add_argument("--output_dir", default="output_search_paper")
+    parser.add_argument("--frozen_network_manifest", help="reuse network choices across Original/Feature/TSIL")
+    return parser
 
 
 if __name__ == "__main__":
     args = build_argparser().parse_args()
-    if not OPTUNA_AVAILABLE:
-        print("Error: optuna not installed. Run: pip install optuna plotly")
-        sys.exit(1)
-
-    with open(args.config_file) as f:
-        base_config = YAML.YAML(typ="safe", pure=True).load(f)
-
-    os.makedirs(args.output_dir, exist_ok=True)
-    with open(os.path.join(args.output_dir, "search_info.json"), "w") as f:
-        json.dump({"models": args.models, "phi_types": args.phi_types,
-                   "tau_values": args.tau_values, "market": args.market,
-                   "n_trials": args.n_trials, "search_space": DEFAULT_SEARCH_SPACE}, f, indent=2)
-
-    run_search(base_config, args.models, args.phi_types, args.tau_values,
-               args.market, args.output_dir, DEFAULT_SEARCH_SPACE,
-               args.n_trials, args.seed, args.early_stop)
+    with open(args.config_file, encoding="utf-8") as stream:
+        config = YAML.YAML(typ="safe").load(stream)
+    config["model_config"]["injection_mode"] = args.injection_mode
+    frozen = json.loads(Path(args.frozen_network_manifest).read_text(encoding="utf-8")) if args.frozen_network_manifest else None
+    run_paper_selection(config, args.models, args.phi_types, args.alpha_values, args.market,
+                        args.output_dir, seeds=args.seeds, n_trials=args.n_trials, frozen_network_manifest=frozen)

@@ -6,10 +6,10 @@ import torch
 import numpy as np
 import pandas as pd
 from qlib.data.dataset import DatasetH
-from qlib.data.dataset.processor import FilterCol, RobustZScoreNorm, Fillna, DropnaLabel, CSRankNorm
 from qlib.data import D
 
-from src.timefeatures import time_features
+from src.predicate_data import build_predicate_cache, required_history
+from src.temporal_predicates import selected_predicates
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -21,96 +21,27 @@ def _to_tensor(x):
 
 
 def _create_ts_slices(index, seq_len):
-    """
-    create time series slices from pandas index
-
-    Args:
-        index (pd.MultiIndex): pandas multiindex with <instrument, datetime> order
-        seq_len (int): sequence length
-    """
-    # assert index.is_lexsorted(), "index should be sorted"
-
-    # number of dates for each code
+    """Create causal feature slices within each sorted instrument block."""
     sample_count_by_codes = pd.Series(0, index=index).groupby(level=0).size().values
-
-    # start_index for each code
     start_index_of_codes = np.roll(np.cumsum(sample_count_by_codes), 1)
-    start_index_of_codes[0] = 0
-
-    # all the [start, stop) indices of features
-    # features btw [start, stop) are used to predict the `stop - 1` label
+    if len(start_index_of_codes):
+        start_index_of_codes[0] = 0
     slices = []
     for cur_loc, cur_cnt in zip(start_index_of_codes, sample_count_by_codes):
         for stop in range(1, cur_cnt + 1):
             end = cur_loc + stop
-            start = max(end - seq_len, 0)
+            start = max(end - seq_len, cur_loc)
             slices.append(slice(start, end))
-    slices = np.array(slices)
-
-    return slices
-
-
-def _get_date_parse_fn(target):
-    """get date parse function
-
-    This method is used to parse date arguments as target type.
-
-    Example:
-        get_date_parse_fn('20120101')('2017-01-01') => '20170101'
-        get_date_parse_fn(20120101)('2017-01-01') => 20170101
-    """
-    if isinstance(target, pd.Timestamp):
-        _fn = lambda x: pd.Timestamp(x)  # Timestamp('2020-01-01')
-    elif isinstance(target, str) and len(target) == 8:
-        _fn = lambda x: str(x).replace("-", "")[:8]  # '20200201'
-    elif isinstance(target, int):
-        _fn = lambda x: int(str(x).replace("-", "")[:8])  # 20200201
-    else:
-        _fn = lambda x: x
-    return _fn
-
-import copy
-import numpy as np
-import torch
-from collections import defaultdict
-from qlib.data.dataset import DatasetH
-# from qlib.data.dataset.utils import _get_date_parse_fn, _to_tensor
+    return np.array(slices, dtype=object)
 
 
 class MTSDatasetH(DatasetH):
-    """Memory Augmented Time Series Dataset.
+    """Feature sequences with separately cached, causal raw-price predicates.
 
-    The dataset adapts what each batch carries to the ``phi_type`` of the loss
-    (passed through from ``model_config`` by ``train.py`` / ``search.py``):
-
-        phi_type = None / 'mse' / 'ones' / 'phi_cycle' / 'phi_phase' /
-                   'phi_momentum' / 'phi_volatility' / 'phi_return_dist' / ...
-            -> calendar/timestamp features are irrelevant; they are NOT built or
-               yielded. Each batch is ``{data, label, index, timestamp_feature=None}``.
-
-        phi_type startswith 'phi_timestamp'  (the Timestamp predicate Phi_ts)
-            -> calendar features ARE extracted (``timestamp_feature_get``) and
-               yielded per batch so the loss can build ``P`` from them. Their
-               encoding is controlled by ``embed`` / ``ts_onehot``:
-                 embed='timeF'              -> continuous time features (timeenc=1)
-                 embed!='timeF', ts_onehot  -> one-hot day-of-week/month/year
-                 embed!='timeF', not onehot -> integer day-of-week/month/year (default)
-
-    Args:
-        handler (DataHandler): data handler
-        segments (dict): data split segments
-        seq_len (int): time series sequence length
-        horizon (int): label horizon (to mask historical loss for TRA)
-        batch_size (int): batch size (<0 means daily batch)
-        shuffle (bool): whether shuffle data
-        pin_memory (bool): whether pin data to gpu memory
-        drop_last (bool): whether drop last batch < batch_size
-        embed (str): calendar encoding ('fixed' | 'learned' | 'timeF'); only used
-            when ``phi_type`` is the timestamp predicate.
-        ts_onehot (bool): one-hot the calendar features; only used when ``phi_type``
-            is the timestamp predicate.
-        phi_type (str): the loss predicate selector; decides whether timestamp
-            features are needed (see above).
+    All modes use the same complete raw-history eligibility rule. TSIL yields
+    descriptors during training only; Feature yields them in both modes.
+    With cross_sectional=True, a batch consists of days_per_batch complete
+    eligible daily cross-sections, irrespective of the stock batch_size.
     """
 
     def __init__(
@@ -123,18 +54,23 @@ class MTSDatasetH(DatasetH):
         shuffle=True,
         pin_memory=False,
         drop_last=False,
-        account=100000000,#1000000, #
+        account=100000000,
         benchmark="SH000300",
         freq='day',
         embed='fixed',
         ts_onehot=False,
         phi_type=None,
+        predicate_config=None,
+        injection_mode='tsil',
+        cross_sectional=False,
+        days_per_batch=2,
         **kwargs,
     ):
-        # print(f"MTSDatasetH init kwargs: {kwargs}")  # debug output
-
-        assert horizon > 0, "please specify `horizon` to avoid data leakage"
-
+        assert horizon > 0, "please specify horizon to avoid data leakage"
+        if injection_mode not in {"original", "feature", "tsil"}:
+            raise ValueError("injection_mode must be original, feature, or tsil")
+        if batch_size == 0 or not isinstance(days_per_batch, int) or days_per_batch < 1:
+            raise ValueError("batch_size must be nonzero and days_per_batch must be positive")
         self.handler_kwargs = handler['kwargs']
         self.seq_len = seq_len
         self.horizon = horizon
@@ -142,42 +78,30 @@ class MTSDatasetH(DatasetH):
         self.shuffle = shuffle
         self.drop_last = drop_last
         self.pin_memory = pin_memory
-        self.params = (batch_size, drop_last, shuffle)  # for train/eval switch
-
+        self.params = (batch_size, drop_last, shuffle)
         self.account = account
         self.benchmark = benchmark
-
         self.freq = freq
         self.embed = embed
         self.ts_onehot = ts_onehot
-
-        # Calendar/timestamp features are extracted ONLY when the loss uses the
-        # timestamp predicate (phi_type starting with 'phi_timestamp'). For every
-        # other phi_type (mse / ones / cycle / phase / momentum / volatility /
-        # return_dist / ...) timestamps are irrelevant and are not built, carried,
-        # or yielded.
         self.phi_type = phi_type
-        self.use_timestamp = bool(phi_type) and ("phi_timestamp" in str(phi_type))
-
-        # self.freq = "day"
-        # self.embed = 'fixed' # 'fixed' 'learned'  'timeF'
-        # self.ts_onehot = True
-
-        self.timeenc = 0 if self.embed != 'timeF' else 1
+        self.predicate_config = dict(predicate_config or {})
+        self.injection_mode = injection_mode
+        self.cross_sectional = cross_sectional
+        self.days_per_batch = days_per_batch
+        self._training = True
+        selected_predicates(phi_type)
 
         self.executor_config = {
             "class": "SimulatorExecutor",
             "module_path": "qlib.backtest.executor",
-            "kwargs": {
-                "time_per_step": "day",
-                "generate_portfolio_metrics": True,
-            },
+            "kwargs": {"time_per_step": "day", "generate_portfolio_metrics": True},
         }
         self.backtest_config = {
             "start_time": segments['test'][0],
             "end_time": segments['test'][1],
             "account": self.account,
-            "benchmark": self.benchmark, # default
+            "benchmark": self.benchmark,
             "exchange_kwargs": {
                 "freq": self.freq,
                 "limit_threshold": 0.095,
@@ -187,147 +111,103 @@ class MTSDatasetH(DatasetH):
                 "min_cost": 5,
             },
         }
-        # kwargs = self.handler_kwargs
-        # super().__init__(handler, segments, self.handler_kwargs, **kwargs)
-        # super().__init__(handler, segments, self.handler_kwargs)
         super().__init__(handler, segments, **kwargs)
 
-    def to_one_hot(self, x, num_class):
-        return np.eye(num_class, dtype=int)[x]
-
-    def timestamp_feature_get(self):
-        freq = 'D' if self.freq == 'day' else self.freq
-        df_stamp = pd.DataFrame(self._index.tolist(), columns=self._index.names)
-        if self.timeenc == 0:
-            if self.ts_onehot:
-                dow = df_stamp['datetime'].dt.weekday  # 0–6
-                dom = df_stamp['datetime'].dt.day  # 1–31
-                doy = df_stamp['datetime'].dt.dayofyear  # 1–366
-
-                dow_oh_cols = [f'dow_{i}' for i in range(7)]
-                dom_oh_cols = [f'dom_{i + 1}' for i in range(31)]
-                doy_oh_cols = [f'doy_{i + 1}' for i in range(366)]
-
-                df_stamp[dow_oh_cols] = self.to_one_hot(dow, 7)
-                df_stamp[dom_oh_cols] = self.to_one_hot(dom - 1, 31)  # 1–31 → 0–30
-                df_stamp[doy_oh_cols] = self.to_one_hot(doy - 1, 366)  # 1–366 → 0–365
-            else:
-                df_stamp['dayofweek'] = df_stamp.datetime.apply(lambda row: row.weekday(), 1)
-                df_stamp['dayofmonth'] = df_stamp.datetime.apply(lambda row: row.day, 1)
-                df_stamp['dayofyear'] = df_stamp.datetime.apply(lambda row: row.timetuple().tm_yday, 1)
-
-                # df_stamp['weekofyear'] = df_stamp.datetime.apply(lambda row: row.isocalendar()[1], 1)
-                # df_stamp['quarterofyear'] = df_stamp.datetime.apply(lambda row: (row.month-1)//3 + 1, 1)
-                # df_stamp['monthofyear'] = df_stamp.datetime.apply(lambda row: row.month, 1)
-                # df_stamp['year'] = df_stamp.datetime.apply(lambda row: row.year, 1)
-            data_stamp = df_stamp.drop(['instrument','datetime'], axis=1).values
-
-        elif self.timeenc == 1:
-            data_stamp = time_features(pd.to_datetime(df_stamp['datetime'].values), freq=freq)
-            data_stamp = data_stamp.transpose(1, 0)
-        return data_stamp
+    def _load_raw_history(self):
+        dates = pd.DatetimeIndex(self._index.get_level_values("datetime"))
+        end = pd.Timestamp(self.handler_kwargs.get("end_time") or dates.max())
+        # No start_time: q is measured from the provider calendar's own origin.
+        self._calendar = pd.DatetimeIndex(D.calendar(end_time=end, freq=self.freq))
+        history = required_history(self.seq_len, self.predicate_config)
+        first = self._calendar.searchsorted(dates.min())
+        start = self._calendar[max(0, first - history)]
+        universe = self.handler_kwargs["instruments"]
+        if isinstance(universe, str):
+            universe = D.instruments(universe)
+        spans = D.list_instruments(universe, start_time=start, end_time=end,
+                                   freq=self.freq, as_list=False)
+        instruments = sorted(set(spans) | set(self._index.get_level_values("instrument")))
+        # Fetch unprocessed prices for the whole symbol list. Membership masks
+        # market returns separately and does not erase pre-membership history.
+        raw = D.features(instruments, ["$close"], start_time=start, end_time=end, freq=self.freq)
+        close = raw["$close"].unstack("instrument").reindex(index=self._calendar, columns=instruments)
+        members = pd.DataFrame(False, index=self._calendar, columns=instruments)
+        for instrument, intervals in spans.items():
+            for begin, finish in intervals:
+                members.loc[pd.Timestamp(begin):pd.Timestamp(finish), instrument] = True
+        return close, members
 
     def setup_data(self, handler_kwargs: dict = None, **kwargs):
-
         super().setup_data()
-
-        # change index to <code, date>
-        # NOTE: we will use inplace sort to reduce memory use
-        # df = self.handler._data
-        if 'type' not in kwargs:
-            df = self.handler._learn #_infer——_data
-            df.index = df.index.swaplevel()
-        elif 'type' in kwargs and kwargs['type'] == 'DK_L':
-            df = self.handler._learn #_learn——_data
-        else:
-            df = self.handler._learn
-            df.index = df.index.swaplevel() # stock first
-
-        # df = self.handler._learn
-        # df.index = df.index.swaplevel()
-        df.sort_index(inplace=True)
-        # fea = [col for col in df.columns if col != 'label']
-        fea = [col for col in df.columns if 'label' not in col]
-
-        self._data = df[fea].squeeze().astype("float32")
-        self._label = df[['label']].squeeze().astype("float32")
+        # The handler is shared by Qlib; never swap or sort its index in place.
+        # DropnaLabel is a learning processor: its future-label mask must not
+        # decide which stocks participate in a relation model's input at t.
+        df = self.handler._infer.reorder_levels(["instrument", "datetime"]).sort_index().copy()
+        label_columns = df.columns.get_level_values(0) == "label"
+        self._data = df.loc[:, ~label_columns].to_numpy(dtype=np.float32)
+        self._label = df.loc[:, label_columns].to_numpy(dtype=np.float32).reshape(len(df), -1)
+        if self._label.shape[1] != 1:
+            raise ValueError("the paper dataset requires one next-day return label")
+        self._label = self._label[:, 0]
         self._index = df.index
+        self._timestamp = None
 
-        # extract calendar/timestamp features only for the timestamp predicate
-        if self.use_timestamp:
-            self._timestamp = self.timestamp_feature_get()  # add
-        else:
-            self._timestamp = None
+        close, membership = self._load_raw_history()
+        names = self.phi_type if self.injection_mode != "original" else None
+        self._predicate_cache, self._eligible, self._trading_index = build_predicate_cache(
+            close, self._index, names, seq_len=self.seq_len,
+            predicate_config=self.predicate_config, market_membership=membership,
+        )
+        self._target_dates = np.full(len(self._index), np.datetime64("NaT"), dtype="datetime64[ns]")
+        known_next = (self._trading_index >= 0) & (self._trading_index + 1 < len(self._calendar))
+        self._target_dates[known_next] = self._calendar.values[self._trading_index[known_next] + 1]
 
-        # add memory to feature
         self._data = np.c_[self._data, np.zeros((len(self._data), 1), dtype=np.float32)]
-
-        # padding tensor
         self.zeros = np.zeros((self.seq_len, self._data.shape[1]), dtype=np.float32)
-        if self.use_timestamp:
-            self.zeros_timestamp = np.zeros((self.seq_len, self._timestamp.shape[1]), dtype=np.float32)
-        else:
-            self.zeros_timestamp = None
-
-        # pin memory
         if self.pin_memory:
             self._data = _to_tensor(self._data)
             self._label = _to_tensor(self._label)
             self.zeros = _to_tensor(self.zeros)
-            if self.use_timestamp:
-                self._timestamp = _to_tensor(self._timestamp) # add
-                self.zeros_timestamp = _to_tensor(self.zeros_timestamp) # add
 
-        # create batch slices
-        self.batch_slices = _create_ts_slices(self._index, self.seq_len)
+        # Preserve rows, but require the paper's complete consecutive-day X_t.
+        # Row-count windows must not bridge gaps in an instrument's membership.
+        slices = _create_ts_slices(self._index, self.seq_len)
+        complete = np.array([
+            slc.stop - slc.start == self.seq_len and
+            self._trading_index[slc.stop - 1] - self._trading_index[slc.start] == self.seq_len - 1
+            for slc in slices
+        ], dtype=bool)
+        self._eligible &= complete
+        self.batch_slices = slices[self._eligible]
+        self.daily_slices = self._daily_slices(self.batch_slices)
 
-        # create daily slices
-        index = [slc.stop - 1 for slc in self.batch_slices]
-        act_index = self.restore_index(index)
-        daily_slices = {date: [] for date in sorted(act_index.unique(level=1))}
-        for i, (code, date) in enumerate(act_index):
-            daily_slices[date].append(self.batch_slices[i])
-        self.daily_slices = list(daily_slices.values())
-
-        # self.stock_slices = {}
-        # for stock in sorted(act_index.unique(level=0)):
-        #     # select all slices for the current stock
-        #     mask = act_index.get_level_values(0) == stock
-        #     self.stock_slices[stock] = [self.batch_slices[i] for i in np.where(mask)[0]]
-        # self.stock_slices = list(self.stock_slices.values())  # convert to list
+    def _daily_slices(self, slices):
+        by_date = {}
+        for slc in slices:
+            date = self._index[slc.stop - 1][1]
+            by_date.setdefault(date, []).append(slc)
+        return [by_date[date] for date in sorted(by_date)]
 
     def _prepare_seg(self, slc, **kwargs):
-
-        fn = _get_date_parse_fn(self._index[0][1])
-
         if isinstance(slc, slice):
             start, stop = slc.start, slc.stop
         elif isinstance(slc, (list, tuple)):
-            start, stop = slc # time split
+            start, stop = slc
         else:
-            raise NotImplementedError(f"This type of input is not supported")
-        start_date = fn(start)
-        end_date = fn(stop)
-        obj = copy.copy(self)  # shallow copy
-        # NOTE: Seriable will disable copy `self._data` so we manually assign them here
-        obj._data = self._data # ordered by stock
-        obj._label = self._label # ordered by stock
-        obj._index = self._index # ordered by stock
-        obj._timestamp = self._timestamp # add
-        new_batch_slices = []
-        for batch_slc in self.batch_slices:
-            date = self._index[batch_slc.stop - 1][1]
-            if start_date <= date <= end_date:
-                new_batch_slices.append(batch_slc) # split train/val/test by time
-        obj.batch_slices = np.array(new_batch_slices)
-
-        new_daily_slices = []
-        for daily_slc in self.daily_slices:
-            date = self._index[daily_slc[0].stop - 1][1]
-            if start_date <= date <= end_date:
-                new_daily_slices.append(daily_slc)
-        obj.daily_slices = new_daily_slices
-
+            raise NotImplementedError("This type of input is not supported")
+        start_date = pd.Timestamp(start) if start is not None else self._calendar[0]
+        end_date = pd.Timestamp(stop) if stop is not None else self._calendar[-1]
+        obj = copy.copy(self)
+        # Qlib's Serializable can omit private data when copying an object.
+        for name in ("_data", "_label", "_index", "_timestamp", "_predicate_cache",
+                     "_eligible", "_trading_index", "_target_dates", "_calendar", "_training"):
+            setattr(obj, name, getattr(self, name))
+        obj.batch_slices = np.array([
+            batch_slc for batch_slc in self.batch_slices
+            if start_date <= self._index[batch_slc.stop - 1][1] <= end_date
+            and self._target_dates[batch_slc.stop - 1] <= end_date.to_datetime64()
+        ], dtype=object)
+        obj.daily_slices = obj._daily_slices(obj.batch_slices)
         return obj
 
     def restore_index(self, index):
@@ -346,28 +226,23 @@ class MTSDatasetH(DatasetH):
     def clear_memory(self):
         self._data[:, -1 :] = 0
 
-    # TODO: better train/eval mode design
     def train(self):
-        """enable traning mode"""
+        """Enable training batches and training-only predicate retrieval."""
         self.batch_size, self.drop_last, self.shuffle = self.params
+        self._training = True
 
     def eval(self):
-        """enable evaluation mode"""
-
-        # self.batch_size = -1
-        # self.drop_last = False
-        self.drop_last = True
-
+        """Keep every evaluation sample; retrieve only Feature descriptors."""
+        self.drop_last = False
         self.shuffle = False
+        self._training = False
 
     def _get_slices(self):
-        # if self.batch_size < 0:
-        #     slices = self.daily_slices.copy()
-        #     batch_size = -1 * self.batch_size
-        # else:
-        slices = self.batch_slices.copy()
-        batch_size = self.batch_size
-        return slices, batch_size
+        if self.cross_sectional:
+            return self.daily_slices.copy(), self.days_per_batch
+        if self.batch_size < 0:
+            return self.daily_slices.copy(), -self.batch_size
+        return self.batch_slices.copy(), self.batch_size
 
     def __len__(self):
         slices, batch_size = self._get_slices()
@@ -379,52 +254,34 @@ class MTSDatasetH(DatasetH):
         slices, batch_size = self._get_slices()
         if self.shuffle:
             np.random.shuffle(slices)
-
-        for i in range(len(slices))[::batch_size]:
+        for i in range(0, len(slices), batch_size):
             if self.drop_last and i + batch_size > len(slices):
                 break
-            # get slices for this batch
-            slices_subset = slices[i : i + batch_size]
-            if self.batch_size < 0:
-                slices_subset = np.concatenate(slices_subset)
-            # collect data
-            data = []
-            label = []
-            index = []
-            timestamp_feature = [] if self.use_timestamp else None
+            slices_subset = slices[i:i + batch_size]
+            if self.cross_sectional or self.batch_size < 0:
+                slices_subset = [slc for daily in slices_subset for slc in daily]
+            data, label, index = [], [], []
             for slc in slices_subset:
-                _data = self._data[slc].clone() if self.pin_memory else self._data[slc].copy()
-                if self.use_timestamp:
-                    _timestamp = self._timestamp[slc].clone() if self.pin_memory else self._timestamp[slc].copy()
-                if len(_data) != self.seq_len:
-                    if self.pin_memory:
-                        _data = torch.cat([self.zeros[: self.seq_len - len(_data)], _data], axis=0)
-                        if self.use_timestamp:
-                            _timestamp = torch.cat([self.zeros_timestamp[: self.seq_len - len(_timestamp)], _timestamp], axis=0) # add
-                    else:
-                        _data = np.concatenate([self.zeros[: self.seq_len - len(_data)], _data], axis=0)
-                        if self.use_timestamp:
-                            _timestamp = np.concatenate([self.zeros_timestamp[: self.seq_len - len(_timestamp)], _timestamp], axis=0) # add
-                _data[-self.horizon :, -1 :] = 0
-                data.append(_data)
-                if self.use_timestamp:
-                    timestamp_feature.append(_timestamp) # add
+                sample = self._data[slc].clone() if self.pin_memory else self._data[slc].copy()
+                if len(sample) != self.seq_len:
+                    padding = self.zeros[:self.seq_len - len(sample)]
+                    sample = torch.cat([padding, sample], dim=0) if self.pin_memory else np.concatenate([padding, sample])
+                sample[-self.horizon:, -1:] = 0
+                data.append(sample)
                 label.append(self._label[slc.stop - 1])
                 index.append(slc.stop - 1)
-
-
-            # concate
-            index = torch.tensor(index, device=device)
-            if isinstance(data[0], torch.Tensor):
-                data = torch.stack(data)
-                label = torch.stack(label)
-                if self.use_timestamp:
-                    timestamp_feature = torch.stack(timestamp_feature)
+            if self.pin_memory:
+                data, label = torch.stack(data), torch.stack(label)
             else:
-                data = _to_tensor(np.stack(data))
-                label = _to_tensor(np.stack(label))
-                if self.use_timestamp:
-                    timestamp_feature = _to_tensor(np.stack(timestamp_feature))
-            # yield -> generator
-
-            yield {"data": data, "label": label, "index": index, 'timestamp_feature': timestamp_feature}
+                data, label = _to_tensor(np.stack(data)), _to_tensor(np.stack(label))
+            positions = np.asarray(index, dtype=np.int64)
+            predicates = {}
+            if self.injection_mode == "feature" or (self.injection_mode == "tsil" and self._training):
+                predicates = {name: _to_tensor(values[positions])
+                              for name, values in self._predicate_cache.items()}
+            yield {
+                "data": data, "label": label,
+                "index": torch.as_tensor(positions, dtype=torch.long, device=device),
+                "date": torch.as_tensor(self._trading_index[positions], dtype=torch.long, device=device),
+                "predicates": predicates, "timestamp_feature": None,
+            }
